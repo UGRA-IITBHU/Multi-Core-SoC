@@ -182,12 +182,14 @@ endmodule
 
 **Interfaces:**
 - Consumes: `p_RESET_VEC`, `if_id__*` offsets from `pipeline_regs.vh`
-- Produces: `pc_gen` (`clk`, `rst_n`, `stall`, `redirect_valid`, `redirect_pc`, `pred_taken`, `pred_pc` → `pc`, `next_pc`, `if_req_valid`); `if_stage` (`clk`, `rst_n`, `pc`, `mem_rsp_rdata`, `stall`, `flush` → `if_id__pc`, `if_id__instr`, `if_id__valid`)
+- Produces: `pc_gen` (`clk`, `rst_n`, `stall`, `redirect_valid`, `redirect_pc`, `pred_taken`, `pred_pc` → `pc`, `next_pc`); `if_stage` (`clk`, `rst_n`, `pc`, `if_rsp_rdata`, `if_rsp_valid`, `stall`, `flush` → `if_id__pc`, `if_id__instr`, `if_id__valid`, `if_req_valid`, `if_req_addr`)
 
-- [ ] **Step 1: Failing tests** — pc_gen: `test_resets_to_reset_vector`, `test_increments_by_four`, `test_redirect_overrides_next_pc`, `test_stall_freezes_pc`, `test_predicted_take_uses_pred_pc`. if_stage: `test_latches_pc_and_instr`, `test_holds_when_stalled`, `test_clears_valid_on_flush`, `test_valid_low_after_reset`.
+**Two memory ports, not one** (spec §6.3). Instruction fetch and load/store each own a port over one unified address space. Phase 4 adds separate L1 I$ and D$ that need independent bandwidth, so splitting now avoids redesigning fetch later — and avoids IF stalling whenever the LSU is active.
+
+- [ ] **Step 1: Failing tests** — pc_gen: `test_resets_to_reset_vector`, `test_increments_by_four`, `test_redirect_overrides_next_pc`, `test_stall_freezes_pc`, `test_predicted_take_uses_pred_pc`. if_stage: `test_latches_pc_and_instr`, `test_holds_when_stalled`, `test_clears_valid_on_flush`, `test_valid_low_after_reset`, `test_issues_fetch_request_for_pc`, `test_latches_fetch_response_into_if_id`, `test_holds_fetch_valid_until_response`.
 - [ ] **Step 2: Verify they fail** — both FAIL, not-implemented assertions fire.
 - [ ] **Step 3: Implement `pc_gen`** — priority arbiter: `redirect_valid` > `pred_taken` > `pc + 4`. `next_pc` combinational; `pc` registers only when not stalled. Wire `pred_taken`/`pred_pc` as inputs tied to constants until phase 5 (§4.1 decision 8). **This module is the single point where every redirect in the core converges** (§4.1 decision 5) — comment it as the funnel so phase 3 adds its trap arm here without redesign.
-- [ ] **Step 4: Implement `if_stage`** — latch `pc` and `mem_rsp_rdata` into the `if_id__*` bundle using the offsets from `pipeline_regs.vh`. Assert `flush` forces `if_id__valid` low regardless of `mem_rsp_rdata`.
+- [ ] **Step 4: Implement `if_stage`** — drive `if_req_valid` with `if_req_addr` from the current `pc`, hold them until `if_rsp_valid`, then latch `if_rsp_rdata` into `if_id__instr` alongside `if_id__pc` using the offsets from `pipeline_regs.vh`. Assert `flush` forces `if_id__valid` low regardless of `if_rsp_rdata`.
 - [ ] **Step 5: Verify both pass standalone** — `make test MODULE=test_pc_gen TOP=pc_gen && make test MODULE=test_if_stage TOP=if_stage` → all PASS.
 - [ ] **Step 6: Lint and synthesise both standalone** — clean.
 - [ ] **Step 7: Commit** — `git commit -m "feat(if): add pc generator, redirect arbiter and fetch stage"`
@@ -257,7 +259,9 @@ endmodule
 
 **Interfaces:**
 - Consumes: all 12 completed modules and the frozen contract
-- Produces: `core (input wire clk, input wire rst_n)` **plus the memory interface as real top-level ports** named exactly as P4's `lsu`: outputs `mem_req_valid`, `mem_req_addr`, `mem_req_wdata`, `mem_req_we`; inputs `mem_rsp_rdata`, `mem_rsp_valid`. Not hierarchical signals — later phases hang AXI off these ports.
+- Produces: `core (input wire clk, input wire rst_n)` **plus both memory interfaces as real top-level ports**, not hierarchical signals — later phases hang AXI masters off these:
+  - instruction fetch — outputs `if_req_valid`, `if_req_addr`; inputs `if_rsp_rdata`, `if_rsp_valid` (from P1's `if_stage`)
+  - load/store — outputs `mem_req_valid`, `mem_req_addr`, `mem_req_wdata`, `mem_req_we`; inputs `mem_rsp_rdata`, `mem_rsp_valid` (from P4's `lsu`)
 
 - [ ] **Step 1: Failing tests** — `test_no_stage_is_valid_after_reset`, `test_single_addi_produces_the_right_register_value`, `test_back_to_back_dependent_addis`, `test_taken_branch_redirects_and_flushes_two_cycles`, `test_untaken_branch_falls_through_with_no_flush`, `test_load_then_use_of_the_loaded_value`, and `test_x0_write_is_discarded_end_to_end`.
 - [ ] **Step 2: Verify they fail** — `make test MODULE=test_core_reset TOP=core` → FAIL, still a stub.
