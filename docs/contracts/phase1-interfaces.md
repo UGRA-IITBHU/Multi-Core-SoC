@@ -20,14 +20,32 @@ shared headers, and modules do include them where they need them:
 |---|---|---|---|
 | `rtl/common/defs.vh` | macros | file scope, before the module | widths used in port declarations |
 | `rtl/core/ctrl_fields.vh` | macros | file scope, before the module | control-field widths used in port declarations |
-| `rtl/core/pipeline_regs.vh` | `localparam` | **inside** `module core` | bundle offsets; `localparam` has module scope only, and `core` is the only module that packs a bundle |
+| `rtl/core/pipeline_regs.vh` | `localparam` | **inside** `module core` | bundle offsets; `localparam` is module-scope only, and `core` is the only module that packs a bundle |
 
 `defs.vh` and `ctrl_fields.vh` must stay macros precisely because ANSI port
-widths need them at file scope, where `localparam` is not available.
-`pipeline_regs.vh` is the one header that is `localparam`, and no port list
-contains a bundle offset — a stage module's port list never contains a
-`p_<BUNDLE>__<field>` signal — so there is nothing for it to be used in at file
-scope. The three shared headers are:
+widths need them at file scope. `pipeline_regs.vh` is the one header that is
+`localparam`, and no port list contains a bundle offset — a stage module's port
+list never contains a `p_<BUNDLE>__<field>` signal — so there is nothing for it
+to be used in at file scope.
+
+**One documented exception to `default_nettype`.** Every file in `rtl/` opens
+with `` `default_nettype none `` and closes with `` `default_nettype wire ``,
+*except* `rtl/core/pipeline_regs.vh`. That exception is forced by the standard
+and loses nothing:
+
+- IEEE 1364-2005 makes `localparam` a **module-scope** declaration item, so the
+  bundle offsets must be declared inside a module.
+- IEEE 1364-2005 requires `` `default_nettype `` to appear **outside** module
+  definitions. Icarus rejects it otherwise: *"`default_nettype` directives must
+  appear outside module definitions."*
+
+A header that must sit inside a module therefore cannot legally carry the
+directive. Nothing is lost: the header declares **no nets at all**, only
+`localparam` integers, so there is no implicit net for the directive to guard;
+and it is parsed under the `` `default_nettype none `` that `core.v` opens with,
+which is already in force.
+
+The three shared headers are:
 
 | Header | Contents |
 |---|---|

@@ -1,3 +1,4 @@
+`default_nettype none
 // ============================================================================
 // defs.vh - global datapath widths for the RV32IMAC 5-stage pipeline SoC.
 //
@@ -27,3 +28,4 @@
 `define p_REG_ADDR_W 5
 
 `endif // SOC_DEFS_VH
+`default_nettype wire

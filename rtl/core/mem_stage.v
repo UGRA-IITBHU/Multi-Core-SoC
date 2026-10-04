@@ -1,3 +1,4 @@
+`default_nettype none
 // ============================================================================
 // mem_stage - memory stage, owner of the MEM/WB pipeline register.
 //
@@ -72,3 +73,4 @@ module mem_stage (
   end
 
 endmodule
+`default_nettype wire

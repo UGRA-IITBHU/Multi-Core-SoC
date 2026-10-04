@@ -1,3 +1,4 @@
+`default_nettype none
 // ============================================================================
 // wb_stage - writeback stage: register write port and WB-stage forwarding
 // source.
@@ -70,3 +71,4 @@ module wb_stage (
   end
 
 endmodule
+`default_nettype wire

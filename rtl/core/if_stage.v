@@ -1,3 +1,4 @@
+`default_nettype none
 // ============================================================================
 // if_stage - instruction fetch stage, owner of the instruction-fetch interface.
 //
@@ -79,3 +80,4 @@ module if_stage (
   end
 
 endmodule
+`default_nettype wire

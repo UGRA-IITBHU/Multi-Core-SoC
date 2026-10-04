@@ -1,3 +1,4 @@
+`default_nettype none
 // ============================================================================
 // hazard_unit - load-use hazard interlock.
 //
@@ -60,3 +61,4 @@ module hazard_unit (
   end
 
 endmodule
+`default_nettype wire

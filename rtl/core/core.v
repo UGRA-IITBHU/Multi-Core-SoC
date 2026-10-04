@@ -1,3 +1,4 @@
+`default_nettype none
 // ============================================================================
 // core - top level of the RV32IMAC 5-stage pipelined SoC.
 //
@@ -69,7 +70,6 @@
 
 `include "defs.vh"
 `include "ctrl_fields.vh"
-`include "pipeline_regs.vh"
 
 /* verilator lint_off UNDRIVEN */
 /* verilator lint_off UNUSEDSIGNAL */
@@ -92,6 +92,19 @@ module core (
 /* verilator lint_on UNUSEDSIGNAL */
 /* verilator lint_on UNDRIVEN */
 
+  // pipeline_regs.vh is included HERE, inside the module body, not at file
+  // scope: it holds `localparam`, and IEEE 1364-2005 makes localparam a
+  // module-scope declaration item.  No port list contains a bundle offset, so
+  // nothing is lost by not having these constants at file scope.
+  //
+  // The UNUSEDPARAM suppression is needed only while this module is a stub and
+  // no field is packed yet - the same reason the port list above suppresses
+  // UNUSEDSIGNAL and UNDRIVEN.  DELETE BOTH LINES when core is implemented and
+  // the offsets are actually referenced.
+  /* verilator lint_off UNUSEDPARAM */
+`include "pipeline_regs.vh"
+  /* verilator lint_on UNUSEDPARAM */
+
   // Phase-1 stub.  The body is deliberately empty: every output reports itself
   // as not implemented until the pipeline is integrated.
   always @(posedge clk) begin
@@ -106,3 +119,4 @@ module core (
   end
 
 endmodule
+`default_nettype wire

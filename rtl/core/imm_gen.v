@@ -1,3 +1,4 @@
+`default_nettype none
 // ============================================================================
 // imm_gen - immediate generator.
 //
@@ -41,3 +42,4 @@ module imm_gen (
   end
 
 endmodule
+`default_nettype wire

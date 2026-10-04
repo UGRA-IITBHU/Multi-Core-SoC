@@ -1,3 +1,4 @@
+`default_nettype none
 // ============================================================================
 // alu - 32-bit integer ALU.
 //
@@ -55,3 +56,4 @@ module alu (
   end
 
 endmodule
+`default_nettype wire

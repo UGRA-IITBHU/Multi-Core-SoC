@@ -1,3 +1,4 @@
+`default_nettype none
 // ============================================================================
 // lsu - load/store unit and owner of the data memory interface.
 //
@@ -104,3 +105,4 @@ module lsu (
   end
 
 endmodule
+`default_nettype wire

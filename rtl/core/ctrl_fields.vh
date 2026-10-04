@@ -1,3 +1,4 @@
+`default_nettype none
 // ============================================================================
 // ctrl_fields.vh - names and widths of the decode/execute control bundle.
 //
@@ -62,3 +63,4 @@
 // Read the offsets from pipeline_regs.vh; do not compute them here.
 
 `endif // SOC_CTRL_FIELDS_VH
+`default_nettype wire

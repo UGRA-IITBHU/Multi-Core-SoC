@@ -21,6 +21,7 @@ Run directly (``python3 tb/test_stubs.py``) or via
 ``python3 -m unittest discover tb``.
 """
 
+import glob
 import os
 import re
 import shutil
@@ -540,19 +541,39 @@ class TestStubContracts(unittest.TestCase):
     def test_pipeline_bundle_layouts_tile_exactly(self):
         """Every stage bundle must be a gapless, overlap-free partition whose
         computed width equals the declared `p_<BUNDLE>_W`, so `core` can pack
-        a field by offset without arithmetic of its own."""
-        table = macro_table()
+        a field by offset without arithmetic of its own.
+
+        The offsets are `localparam`, not macros (IEEE 1364-2005 makes localparam
+        a module-scope item, so pipeline_regs.vh is included inside `core`), so
+        this reads the declarations directly rather than expanding macros."""
         path = os.path.join(RTL_CORE, "pipeline_regs.vh")
         with open(path) as handle:
             text = _strip_comments(handle.read())
+        self.assertNotIn(
+            "`define", text,
+            "pipeline_regs.vh must use localparam, not `define",
+        )
+        self.assertNotIn(
+            "`ifndef", text,
+            "pipeline_regs.vh must use localparam, so it needs no include guard",
+        )
+        params = dict(
+            (name, int(value))
+            for name, value in re.findall(
+                r"localparam\s+integer\s+(p_\w+)\s*=\s*(\d+)\s*;", text
+            )
+        )
+        self.assertTrue(params, "no localparams found in pipeline_regs.vh")
         for bundle in ("IF_ID", "ID_EX", "EX_MEM", "MEM_WB"):
             with self.subTest(bundle=bundle):
                 fields = []
                 for name, lsb in re.findall(
-                    r"`define p_%s__(\w+)_LSB\s+(\d+)" % bundle, text
+                    r"localparam\s+integer\s+p_%s__(\w+)_LSB\s*=\s*(\d+)\s*;"
+                    % bundle, text
                 ):
-                    width = int(table["p_%s__%s_W" % (bundle, name)])
-                    fields.append((int(lsb), width, name))
+                    key = "p_%s__%s_W" % (bundle, name)
+                    self.assertIn(key, params, "%s has no width" % key)
+                    fields.append((int(lsb), params[key], name))
                 self.assertTrue(fields, "no fields found for %s" % bundle)
                 fields.sort()
                 expected_lsb = 0
@@ -564,10 +585,108 @@ class TestStubContracts(unittest.TestCase):
                         % (bundle, name, lsb, expected_lsb),
                     )
                     expected_lsb = lsb + width
+                self.assertIn(
+                    "p_%s_W" % bundle, params, "p_%s_W is missing" % bundle
+                )
                 self.assertEqual(
                     expected_lsb,
-                    int(table["p_%s_W" % bundle]),
+                    params["p_%s_W" % bundle],
                     "p_%s_W disagrees with the sum of its fields" % bundle,
+                )
+
+    def test_every_stage_bundle_has_a_valid_field(self):
+        """Review Focus item 1 depends on the four valid bits being real bundle
+        fields with offsets, not merely internal wires of `core`."""
+        path = os.path.join(RTL_CORE, "pipeline_regs.vh")
+        with open(path) as handle:
+            text = _strip_comments(handle.read())
+        for bundle in ("IF_ID", "ID_EX", "EX_MEM", "MEM_WB"):
+            with self.subTest(bundle=bundle):
+                self.assertRegex(
+                    text,
+                    r"localparam\s+integer\s+p_%s__VALID_LSB\s*=\s*\d+\s*;" % bundle,
+                    "%s has no VALID_LSB offset" % bundle,
+                )
+                self.assertRegex(
+                    text,
+                    r"localparam\s+integer\s+p_%s__VALID_W\s*=\s*1\s*;" % bundle,
+                    "%s VALID is not one bit wide" % bundle,
+                )
+
+    # pipeline_regs.vh is the one documented exception: IEEE 1364-2005 makes
+    # `localparam` a module-scope item AND requires `default_nettype to appear
+    # outside module definitions, so a header included inside `core` cannot
+    # legally carry the directive. It declares no nets, and it is parsed under
+    # core.v's already-open `default_nettype none`.
+    NETTYPE_EXEMPT = {"pipeline_regs.vh"}
+
+    def test_default_nettype_discipline(self):
+        """A1: every file in rtl/ opens with `default_nettype none and closes
+        with `default_nettype wire, so an implicit net can never creep in."""
+        files = sorted(
+            glob.glob(os.path.join(RTL_CORE, "*.v"))
+            + glob.glob(os.path.join(RTL_CORE, "*.vh"))
+            + glob.glob(os.path.join(RTL_COMMON, "*.vh"))
+        )
+        self.assertEqual(len(files), 16, "expected 16 files in rtl/")
+        for path in files:
+            name = os.path.basename(path)
+            with self.subTest(path=os.path.relpath(path, REPO_ROOT)):
+                with open(path) as handle:
+                    lines = [l.strip() for l in handle.read().split("\n") if l.strip()]
+                body = "\n".join(lines)
+                code = _strip_comments(body)
+                if name in self.NETTYPE_EXEMPT:
+                    # must NOT carry the directive (it is illegal in-module),
+                    # must carry no net declaration at all, and must say why
+                    self.assertNotIn("`default_nettype", code)
+                    self.assertNotRegex(code, r"(?m)^\s*(input|output|wire|reg)\b")
+                    self.assertIn("NO `default_nettype` HERE", body)
+                    continue
+                self.assertEqual(
+                    lines[0], "`default_nettype none",
+                    "%s does not open with `default_nettype none" % path,
+                )
+                self.assertEqual(
+                    lines[-1], "`default_nettype wire",
+                    "%s does not close with `default_nettype wire" % path,
+                )
+                self.assertNotIn("`default_nettype none", "\n".join(lines[1:-1]),
+                                 "%s has a stray mid-file default_nettype" % path)
+
+    def test_exempt_file_really_is_a_nonnet_fragment(self):
+        """Proves the A1 exception is harmless rather than merely asserted: the
+        exempt header declares no nets, so there is no implicit net for a
+        `default_nettype directive to guard."""
+        with open(os.path.join(RTL_CORE, "pipeline_regs.vh")) as handle:
+            body = _strip_comments(handle.read())
+        self.assertNotRegex(
+            body, r"(?m)^\s*(input|output|inout|wire|reg|tri|wand|wor)\b",
+            "pipeline_regs.vh must declare no nets",
+        )
+        self.assertRegex(
+            body, r"localparam\s+integer\s+p_",
+            "pipeline_regs.vh must declare localparams",
+        )
+
+    def test_pipeline_regs_uses_localparam_not_macros(self):
+        """A2: bundle offsets are localparam; the width headers stay macros so
+        they remain usable in ANSI port widths at file scope."""
+        with open(os.path.join(RTL_CORE, "pipeline_regs.vh")) as handle:
+            regs = handle.read()
+        self.assertEqual(
+            len(re.findall(r"localparam\s+integer", regs)), 94,
+            "expected 94 localparams: 4 bundles x (fields x 2 + 1 total width)",
+        )
+        self.assertNotIn("`define", regs, "pipeline_regs.vh still uses `define")
+        for header in ("rtl/common/defs.vh", "rtl/core/ctrl_fields.vh"):
+            with self.subTest(header=header):
+                with open(os.path.join(REPO_ROOT, header)) as handle:
+                    body = _strip_comments(handle.read())
+                self.assertIn(
+                    "`define", body,
+                    "%s must stay macros: port widths need them at file scope"
+                    % header,
                 )
 
     def test_every_input_is_driven_to_a_nonzero_pattern(self):

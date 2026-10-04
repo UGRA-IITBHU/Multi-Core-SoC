@@ -1,3 +1,4 @@
+`default_nettype none
 // ============================================================================
 // ex_stage - execute stage: operand select, ALU, branch and jump resolution.
 //
@@ -125,3 +126,4 @@ module ex_stage (
   end
 
 endmodule
+`default_nettype wire

@@ -1,3 +1,4 @@
+`default_nettype none
 // ============================================================================
 // regfile - 32x32 register file with combinational reads and clocked writes.
 //
@@ -58,3 +59,4 @@ module regfile (
   end
 
 endmodule
+`default_nettype wire

@@ -1,3 +1,4 @@
+`default_nettype none
 // ============================================================================
 // forwarding - operand forwarding network.
 //
@@ -68,3 +69,4 @@ module forwarding (
   end
 
 endmodule
+`default_nettype wire

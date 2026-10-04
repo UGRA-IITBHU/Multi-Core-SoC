@@ -1,3 +1,4 @@
+`default_nettype none
 // ============================================================================
 // pc_gen - next-instruction-address generator for the fetch stage.
 //
@@ -63,3 +64,4 @@ module pc_gen (
   end
 
 endmodule
+`default_nettype wire

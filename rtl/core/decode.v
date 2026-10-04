@@ -1,3 +1,4 @@
+`default_nettype none
 // ============================================================================
 // decode - RV32IMAC instruction decoder.
 //
@@ -100,3 +101,4 @@ module decode (
   end
 
 endmodule
+`default_nettype wire
