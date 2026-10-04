@@ -38,7 +38,7 @@
 `define p_IF_ID_W                97
 
 // ===========================================================================
-// ID/EX bundle  (width 165)
+// ID/EX bundle  (width 170)
 //
 // Produced by `core` from `decode` control fields, `regfile` read data and
 // `imm_gen` output.  Consumed by `ex_stage`, `forwarding`, `hazard_unit`.
@@ -85,7 +85,24 @@
 `define p_ID_EX__PC_LSB          133
 `define p_ID_EX__PC_W            32
 
-`define p_ID_EX_W                165
+// -- control class and register-field meaning -------------------------------
+// Added after the rest of the bundle was frozen, so these sit above `pc` and
+// no offset above changes.  `is_branch` / `is_jal` / `is_jalr` are what let
+// `ex_stage` resolve a branch or jump; `uses_rd` says whether the rd field is
+// meaningful; `is_illegal` is the decode verdict that an opcode or funct
+// encoding is not implemented.
+`define p_ID_EX__IS_BRANCH_LSB   165
+`define p_ID_EX__IS_BRANCH_W     1
+`define p_ID_EX__IS_JAL_LSB      166
+`define p_ID_EX__IS_JAL_W        1
+`define p_ID_EX__IS_JALR_LSB     167
+`define p_ID_EX__IS_JALR_W       1
+`define p_ID_EX__IS_ILLEGAL_LSB  168
+`define p_ID_EX__IS_ILLEGAL_W    1
+`define p_ID_EX__USES_RD_LSB     169
+`define p_ID_EX__USES_RD_W       1
+
+`define p_ID_EX_W                170
 
 // ===========================================================================
 // EX/MEM bundle  (width 108)

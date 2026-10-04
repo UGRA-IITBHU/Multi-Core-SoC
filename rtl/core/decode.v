@@ -11,8 +11,13 @@
 //   op2_sel        output 3   0 = rs2, 1 = imm, 2 = 4, 3 = pc
 //   imm_sel        output 3   immediate format select for `imm_gen`
 //   branch_funct3  output 3   funct3 for branch comparison in `ex_stage`
+//   is_branch      output 1   conditional branch (BEQ/BNE/BLT/BGE/BLTU/BGEU)
+//   is_jal         output 1   JAL
+//   is_jalr        output 1   JALR
+//   is_illegal     output 1   opcode or funct encoding not implemented
 //   uses_rs1       output 1   instruction reads rs1
 //   uses_rs2       output 1   instruction reads rs2
+//   uses_rd        output 1   the rd field is meaningful
 //   mem_read       output 1   instruction is a load
 //   mem_write      output 1   instruction is a store
 //   mem_size       output 2   0 = byte, 1 = half, 2 = word
@@ -49,8 +54,13 @@ module decode (
   output wire [`p_OP2_SEL_W-1:0]  op2_sel,
   output wire [`p_IMM_SEL_W-1:0]  imm_sel,
   output wire [`p_FUNCT3_W-1:0]   branch_funct3,
+  output wire [`p_IS_BRANCH_W-1:0] is_branch,
+  output wire [`p_IS_JAL_W-1:0]    is_jal,
+  output wire [`p_IS_JALR_W-1:0]   is_jalr,
+  output wire [`p_IS_ILLEGAL_W-1:0] is_illegal,
   output wire                     uses_rs1,
   output wire                     uses_rs2,
+  output wire [`p_USES_RD_W-1:0]  uses_rd,
   output wire                     mem_read,
   output wire                     mem_write,
   output wire [`p_MEM_SIZE_W-1:0] mem_size,
@@ -69,8 +79,13 @@ module decode (
     assert (1'b0) else $error("not implemented: decode.op2_sel");
     assert (1'b0) else $error("not implemented: decode.imm_sel");
     assert (1'b0) else $error("not implemented: decode.branch_funct3");
+    assert (1'b0) else $error("not implemented: decode.is_branch");
+    assert (1'b0) else $error("not implemented: decode.is_jal");
+    assert (1'b0) else $error("not implemented: decode.is_jalr");
+    assert (1'b0) else $error("not implemented: decode.is_illegal");
     assert (1'b0) else $error("not implemented: decode.uses_rs1");
     assert (1'b0) else $error("not implemented: decode.uses_rs2");
+    assert (1'b0) else $error("not implemented: decode.uses_rd");
     assert (1'b0) else $error("not implemented: decode.mem_read");
     assert (1'b0) else $error("not implemented: decode.mem_write");
     assert (1'b0) else $error("not implemented: decode.mem_size");

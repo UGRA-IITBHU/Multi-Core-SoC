@@ -14,8 +14,12 @@
 //   id_op1_sel        input  2   first-operand select
 //   id_op2_sel        input  3   second-operand select
 //   id_branch_funct3  input  3   branch funct3
+//   id_is_branch      input  1   conditional branch (BEQ/BNE/BLT/BGE/BLTU/BGEU)
+//   id_is_jal         input  1   JAL
+//   id_is_jalr        input  1   JALR
 //   id_uses_rs1       input  1   instruction reads rs1
 //   id_uses_rs2       input  1   instruction reads rs2
+//   id_uses_rd        input  1   the rd field is meaningful
 //   id_mem_read       input  1   instruction is a load
 //   id_mem_write      input  1   instruction is a store
 //   id_mem_size       input  2   0 = byte, 1 = half, 2 = word
@@ -39,7 +43,12 @@
 // Guarantee to `core`, `lsu` and `pc_gen`: `ex_redirect_valid` is the only
 // redirect source in the pipeline, and it is resolved in this stage in the
 // cycle the branch or jump is in EX, so `pc_gen` has exactly one funnel to
-// obey.  `ex_alu_result` is the effective address for both loads and stores,
+// obey.  Branch and jump resolution needs nothing beyond this port list:
+// `id_is_branch` / `id_is_jal` / `id_is_jalr` identify the instruction class,
+// `id_branch_funct3` selects the comparison, `id_pc` gives the sequential and
+// `pc + 4` target, `id_imm` gives the branch and JAL displacement, `id_alu_op`
+// with `id_op1_sel` / `id_op2_sel` gives the address arithmetic, and
+// `ex_rs1_data` / `ex_rs2_data` are the already-forwarded operands.  `ex_alu_result` is the effective address for both loads and stores,
 // so `lsu` needs no separate address computation.  When `id_uses_rs1` or
 // `id_uses_rs2` is low the corresponding operand is forced to zero here, so an
 // unforwarded operand never propagates stale data.
@@ -65,8 +74,12 @@ module ex_stage (
   input  wire [`p_OP1_SEL_W-1:0]  id_op1_sel,
   input  wire [`p_OP2_SEL_W-1:0]  id_op2_sel,
   input  wire [`p_FUNCT3_W-1:0]   id_branch_funct3,
+  input  wire [`p_IS_BRANCH_W-1:0] id_is_branch,
+  input  wire [`p_IS_JAL_W-1:0]    id_is_jal,
+  input  wire [`p_IS_JALR_W-1:0]   id_is_jalr,
   input  wire                     id_uses_rs1,
   input  wire                     id_uses_rs2,
+  input  wire [`p_USES_RD_W-1:0]  id_uses_rd,
   input  wire                     id_mem_read,
   input  wire                     id_mem_write,
   input  wire [`p_MEM_SIZE_W-1:0] id_mem_size,

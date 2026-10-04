@@ -83,11 +83,18 @@ prediction.
 | `pred_taken` | in | 1 | static prediction says the next PC is `pred_pc` |
 | `pred_pc` | in | 32 | predicted next PC |
 | `pc` | out | 32 | address of the instruction being fetched |
+| `next_pc` | out | 32 | combinational next address after the arbiter |
 
 **Guarantee to `if_stage`.** `pc` always holds the address of the instruction
 currently being fetched; while `stall` is high `pc` does not advance, and
 `redirect_valid` takes priority over both `pred_taken` and the sequential +4
 step in the same cycle it is presented.
+
+**Guarantee to `core`.** `next_pc` is the combinational result of that same
+priority arbiter — `redirect_valid` > `pred_taken` > `pc + 4` — and is valid in
+the same cycle as `pc`, so the arbiter's decision is observable without waiting a
+cycle for `pc` to register. `pc` and `next_pc` never disagree about which source
+won.
 
 **Note.** `pc_gen` has no memory-response port. The instruction-fetch handshake
 belongs to `if_stage` and the load/store handshake to `lsu`, so a fetch stall
@@ -175,8 +182,13 @@ ends of the writeback path.
 | `op2_sel` | out | 3 | 0 = rs2, 1 = imm, 2 = 4, 3 = pc |
 | `imm_sel` | out | 3 | immediate format for `imm_gen` |
 | `branch_funct3` | out | 3 | funct3 for branch comparison in `ex_stage` |
+| `is_branch` | out | 1 | conditional branch (BEQ/BNE/BLT/BGE/BLTU/BGEU) |
+| `is_jal` | out | 1 | JAL |
+| `is_jalr` | out | 1 | JALR |
+| `is_illegal` | out | 1 | opcode or funct encoding not implemented |
 | `uses_rs1` | out | 1 | instruction reads rs1 |
 | `uses_rs2` | out | 1 | instruction reads rs2 |
+| `uses_rd` | out | 1 | the rd field is meaningful |
 | `mem_read` | out | 1 | instruction is a load |
 | `mem_write` | out | 1 | instruction is a store |
 | `mem_size` | out | 2 | 0 = byte, 1 = half, 2 = word |
@@ -190,10 +202,22 @@ them into ID/EX in the same cycle the instruction is decoded. `imm_sel`
 encoding is **0 = I, 1 = S, 2 = B, 3 = U, 4 = J**. `mem_size` is meaningful
 only when `mem_read` or `mem_write` is high and is `0` otherwise.
 
-**Note.** Illegal *instruction* encodings are not diagnosed in phase 1.
-Instruction-legality trapping belongs to a later phase, and freezing a trap
-output that nobody drives would constrain every downstream owner for nothing.
-Misaligned *data* accesses are diagnosed by `lsu.is_illegal`.
+`is_branch`, `is_jal` and `is_jalr` are **mutually exclusive**: at most one is
+high for any instruction, so `ex_stage` resolves a branch or jump from them plus
+`branch_funct3` without re-decoding the opcode. `is_illegal` is **independent**
+of them — an unimplemented encoding sets `is_illegal` and none of the three.
+
+`uses_rd` is separate from `reg_write`: `reg_write` says the instruction updates
+rd, `uses_rd` says the rd field carries a meaningful index, and the two differ
+for instructions that merely mention rd. Downstream, `uses_rd` is what stops a
+meaningless rd field from producing a false register-index match.
+
+**Note — `is_illegal` is a decode verdict, not a trap.** Carrying it to a trap or
+to writeback suppression is `core`'s job, because `core` owns the bundles. The
+frozen contract carries `is_illegal` in ID/EX only; which further bundle, if
+any, must also carry it is listed under *Known future contract changes*.
+Misaligned *data* accesses are a separate condition, reported by
+`lsu.is_illegal`.
 
 ## 5. `imm_gen` — immediate generator
 
@@ -253,8 +277,12 @@ Combinational.
 | `id_op1_sel` | in | 2 | first-operand select |
 | `id_op2_sel` | in | 3 | second-operand select |
 | `id_branch_funct3` | in | 3 | branch funct3 |
+| `id_is_branch` | in | 1 | conditional branch (BEQ/BNE/BLT/BGE/BLTU/BGEU) |
+| `id_is_jal` | in | 1 | JAL |
+| `id_is_jalr` | in | 1 | JALR |
 | `id_uses_rs1` | in | 1 | instruction reads rs1 |
 | `id_uses_rs2` | in | 1 | instruction reads rs2 |
+| `id_uses_rd` | in | 1 | the rd field is meaningful |
 | `id_mem_read` | in | 1 | instruction is a load |
 | `id_mem_write` | in | 1 | instruction is a store |
 | `id_mem_size` | in | 2 | 0 = byte, 1 = half, 2 = word |
@@ -277,7 +305,14 @@ Combinational.
 
 **Guarantee to `core`, `lsu` and `pc_gen`.** `ex_redirect_valid` is the only
 redirect source in the pipeline, resolved in this stage in the cycle the branch
-or jump is in EX, so `pc_gen` has exactly one funnel to obey. `ex_alu_result`
+or jump is in EX, so `pc_gen` has exactly one funnel to obey.
+
+Branch and jump resolution needs nothing beyond this port list:
+`id_is_branch` / `id_is_jal` / `id_is_jalr` identify the instruction class,
+`id_branch_funct3` selects the comparison, `id_pc` gives the sequential and
+`pc + 4` target, `id_imm` gives the branch and JAL displacement, `id_alu_op`
+with `id_op1_sel` / `id_op2_sel` gives the address arithmetic, and `ex_rs1_data`
+/ `ex_rs2_data` are the already-forwarded operands. `ex_alu_result`
 is the effective address for both loads and stores, so `lsu` needs no separate
 address computation. When `id_uses_rs1` or `id_uses_rs2` is low the
 corresponding operand is forced to zero here, so an unforwarded operand never
@@ -487,11 +522,25 @@ one module that owns all bundle packing.
 
 ## Signal provenance — who produces each stage-bundle field
 
-`core` packs all four bundles using the offsets in `pipeline_regs.vh`. The
-tables below name which owner produces each field, so that no stage-module
-owner assumes they are also packing a bundle. **No module other than `core`
-packs a bundle.** `id_ex__*` in particular is assembled by `core` from `decode`
-control fields, `regfile` read data and `imm_gen` output.
+**Stage modules produce values; `core` owns bundle packing.** No stage module
+packs a stage bundle. `pc_gen`, `if_stage`, `decode`, `imm_gen`, `regfile`,
+`ex_stage`, `lsu`, `mem_stage` and `wb_stage` each produce discrete signals on
+their own ports; `core` is the only module that assembles those signals into the
+`if_id__*`, `id_ex__*`, `ex_mem__*` and `mem_wb_*` bundles, using the offsets in
+`pipeline_regs.vh`. A stage module's port list therefore never contains a
+`p_<BUNDLE>__<field>` signal.
+
+The tables below name which owner produces each field so that no stage-module
+owner assumes they are also packing a bundle. `id_ex__*` in particular is
+assembled by `core` from `decode` control fields, `regfile` read data and
+`imm_gen` output.
+
+**`core` also owns the per-bundle `valid` bits.** Because `core` packs the
+bundles, the `if_id__valid`, `id_ex__valid`, `ex_mem__valid` and `mem_wb__valid`
+bits are internal wires of `core`. No stage module has a `valid` port, and
+`core` forces all four low while `rst_n` is asserted. Task 8's reset-validity
+work and `test_no_stage_is_valid_after_reset` both depend on this, and it needs
+no port-list change.
 
 ### Top-level memory ports — who owns which pair
 
@@ -521,7 +570,7 @@ through to its owner with no arbitration between them.
 | `pred_pc` | 32 | 33 | `if_stage` |
 | `instr` | 32 | 65 | `if_stage` |
 
-### ID/EX (width 165) — packed by `core`
+### ID/EX (width 170) — packed by `core`
 
 | Field | Width | Offset | Produced by |
 |---|---|---|---|
@@ -544,6 +593,18 @@ through to its owner with no arbitration between them.
 | `rs2_data` | 32 | 69 | `regfile` |
 | `rs1_data` | 32 | 101 | `regfile` |
 | `pc` | 32 | 133 | `pc_gen` (via IF/ID) |
+| `is_branch` | 1 | 165 | `decode` |
+| `is_jal` | 1 | 166 | `decode` |
+| `is_jalr` | 1 | 167 | `decode` |
+| `is_illegal` | 1 | 168 | `decode` |
+| `uses_rd` | 1 | 169 | `decode` |
+
+The five fields above `pc` were added after the rest of the bundle was frozen,
+so they sit at the top of ID/EX and **no previously frozen offset moves**. All
+five are produced by `decode` and routed into the bundle by `core`.
+`is_branch` / `is_jal` / `is_jalr` reach `ex_stage` as `id_is_branch` /
+`id_is_jal` / `id_is_jalr`; `uses_rd` reaches it as `id_uses_rd`; `is_illegal` is
+read by `core` out of the bundle it owns.
 
 ### EX/MEM (width 108) — packed by `core` from `ex_stage` + `lsu`
 
@@ -586,13 +647,13 @@ through to its owner with no arbitration between them.
 These are deliberately *not* in the frozen port lists. Each will need a
 contract change under the gate above when its phase lands.
 
-- **Instruction-legality trap (`decode.is_illegal`).** Not in the frozen port
-  list. `decode` currently has no illegal-encoding output; `lsu.is_illegal` and
-  `mem_stage.mem_illegal` cover *misaligned data accesses* only. A
-  `decode.is_illegal` output plus whatever top-level trap signalling a phase
-  needs is still outstanding and awaits sign-off — note it would have to be
-  threaded through ID/EX and EX/MEM and consumed by `mem_stage`, not added as a
-  single port.
+- **`decode.is_illegal` is now present** as of the second contract change; it is
+  a frozen `decode` output and rides in ID/EX. What remains genuinely future is
+  the *consumption* side: whether `is_illegal` must also ride in EX/MEM or
+  MEM/WB so that an unimplemented instruction can be prevented from writing the
+  register file, and whatever top-level trap signalling a phase needs. Today
+  `lsu.is_illegal` and `mem_stage.mem_illegal` still cover *misaligned data
+  accesses* only.
 - **`wb_stall`.** Only meaningful once the memory stage is no longer a
   single-cycle pass-through.
 - **Program loading.** A top-level path for getting a program into the design.
