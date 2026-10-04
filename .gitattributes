@@ -1,0 +1,20 @@
+# Normalise line endings so the same sources lint, elaborate and synthesise
+# identically on macOS, Linux and CI.  A CRLF in a .v file is the kind of thing
+# that makes a lint failure look like a tool bug on somebody else's machine.
+* text=auto eol=lf
+
+*.v    text eol=lf
+*.vh   text eol=lf
+*.py   text eol=lf
+*.sh   text eol=lf
+Makefile text eol=lf
+*.md   text eol=lf
+
+# Build and simulation output: keep it out of diffs and out of the index.
+sim_build/ text -diff
+obj_dir/   text -diff
+build/     text -diff
+
+# Liberty and PDK downloads are binary-ish and huge; they are fetched by
+# scripts/fetch-liberty.sh and gitignored anyway.
+*.lib text eol=lf -diff

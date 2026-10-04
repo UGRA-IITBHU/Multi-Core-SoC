@@ -7,8 +7,13 @@ third_party/
 # cocotb / Verilator build output
 sim_build/
 obj_dir/
+build/
 __pycache__/
 *.pyc
+
+# Per-checkout Python environment holding cocotb (see docs/SETUP.md).  Four
+# people each create their own; it must never be committed.
+.venv/
 
 # Simulation artefacts
 *.vcd
