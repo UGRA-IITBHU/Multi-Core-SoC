@@ -221,7 +221,9 @@ named rather than magic numbers.
 
 ### 3.4 What the loss of concurrent SVA costs, and the mitigation
 
-Immediate assertions are Verilog-2001 and are used directly:
+Immediate assertions are the IEEE 1364-2005 form and are used directly. Verilator accepts
+them with no extra flag; **Icarus Verilog requires `-g2012`**, which is a simulator flag and
+does not change the fact that the source is a strict Verilog subset:
 
 ```verilog
 always @(posedge clk)
@@ -424,8 +426,17 @@ with a small `initramfs` and a filesystem. Drop `lwIP` from any memory estimate 
 
 ### 6.3 Bus hierarchy
 
-- **Phases 1–6:** internal `mem_req` / `mem_rsp` — valid/ready, addr, wdata, we, rdata —
-  shaped deliberately as an **AXI4-legal subset** so the phase-7 shim is mechanical.
+- **Phases 1–6:** two internal port pairs over one unified address space, each shaped
+  deliberately as an **AXI4-legal subset** so the phase-7 shim is mechanical:
+  - **Instruction fetch** — `if_req_valid`, `if_req_addr` out; `if_rsp_rdata`,
+    `if_rsp_valid` in. Driven by IF.
+  - **Load/store** — `mem_req_valid`, `mem_req_addr`, `mem_req_wdata`, `mem_req_we` out;
+    `mem_rsp_rdata`, `mem_rsp_valid` in. Driven by the LSU.
+
+  Two ports rather than one shared, arbitrated port because phase 4 introduces separate L1
+  I$ and D$, which need independent bandwidth. Two ports now avoids redesigning the fetch
+  path at phase 4; a shared port would have to be split then, and would meanwhile force IF
+  to stall whenever the LSU is active.
 - **Phase 7:** AXI4 master on the core and any DMA-capable path; **AXI4-Lite crossbar** to
   register peripherals; full AXI4 only where bursts are genuinely required. The
   interconnect is **multi-master capable** from the start, so adding a second core later
