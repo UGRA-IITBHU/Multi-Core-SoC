@@ -1,5 +1,8 @@
 # Setting up and working on this repository
 
+> **New here?** Read this page end to end, then read
+> [`docs/TEAM.md`](./TEAM.md) — it tells you exactly which modules you own and what to build.
+
 ## What this project is
 
 This is a from-scratch RV32IMAC 5-stage pipelined RISC-V SoC written in pure
