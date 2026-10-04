@@ -39,6 +39,7 @@
 //   ex_mem_unsigned   output 1   load is unsigned
 //   ex_redirect_valid output 1   fetch must redirect this cycle
 //   ex_redirect_pc    output 32  redirect target
+//   ex_target_misaligned output 1 branch/JAL/JALR target is not 4-byte aligned
 //
 // Guarantee to `core`, `lsu` and `pc_gen`: `ex_redirect_valid` is the only
 // redirect source in the pipeline, and it is resolved in this stage in the
@@ -48,7 +49,9 @@
 // `id_branch_funct3` selects the comparison, `id_pc` gives the sequential and
 // `pc + 4` target, `id_imm` gives the branch and JAL displacement, `id_alu_op`
 // with `id_op1_sel` / `id_op2_sel` gives the address arithmetic, and
-// `ex_rs1_data` / `ex_rs2_data` are the already-forwarded operands.  `ex_alu_result` is the effective address for both loads and stores,
+// `ex_rs1_data` / `ex_rs2_data` are the already-forwarded operands.
+//
+// `ex_alu_result` is the effective address for both loads and stores,
 // so `lsu` needs no separate address computation.  When `id_uses_rs1` or
 // `id_uses_rs2` is low the corresponding operand is forced to zero here, so an
 // unforwarded operand never propagates stale data.
@@ -98,7 +101,8 @@ module ex_stage (
   output wire [`p_MEM_SIZE_W-1:0] ex_mem_size,
   output wire                     ex_mem_unsigned,
   output wire                     ex_redirect_valid,
-  output wire [`p_PC_W-1:0]       ex_redirect_pc
+  output wire [`p_PC_W-1:0]       ex_redirect_pc,
+  output wire                     ex_target_misaligned
 );
 /* verilator lint_on UNUSEDSIGNAL */
 /* verilator lint_on UNDRIVEN */
@@ -117,6 +121,7 @@ module ex_stage (
     assert (1'b0) else $error("not implemented: ex_stage.ex_mem_unsigned");
     assert (1'b0) else $error("not implemented: ex_stage.ex_redirect_valid");
     assert (1'b0) else $error("not implemented: ex_stage.ex_redirect_pc");
+    assert (1'b0) else $error("not implemented: ex_stage.ex_target_misaligned");
   end
 
 endmodule

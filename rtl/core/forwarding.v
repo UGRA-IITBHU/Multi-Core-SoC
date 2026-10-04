@@ -7,8 +7,6 @@
 // Ports (frozen; see docs/contracts/phase1-interfaces.md):
 //   ex_rs1_addr    input  5   rs1 index of the instruction in execute
 //   ex_rs2_addr    input  5   rs2 index of the instruction in execute
-//   id_rs1_addr    input  5   rs1 index of the instruction in decode
-//   id_rs2_addr    input  5   rs2 index of the instruction in decode
 //   id_uses_rs1    input  1   the decode instruction reads rs1
 //   id_uses_rs2    input  1   the decode instruction reads rs2
 //   mem_rd_addr    input  5   destination of the MEM-stage value
@@ -44,8 +42,6 @@
 module forwarding (
   input  wire [`p_REG_ADDR_W-1:0] ex_rs1_addr,
   input  wire [`p_REG_ADDR_W-1:0] ex_rs2_addr,
-  input  wire [`p_REG_ADDR_W-1:0] id_rs1_addr,
-  input  wire [`p_REG_ADDR_W-1:0] id_rs2_addr,
   input  wire                     id_uses_rs1,
   input  wire                     id_uses_rs2,
   input  wire [`p_REG_ADDR_W-1:0] mem_rd_addr,

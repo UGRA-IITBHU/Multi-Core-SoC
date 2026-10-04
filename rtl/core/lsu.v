@@ -23,7 +23,8 @@
 //   mem_req_addr    output 32   request address
 //   mem_req_wdata   output 32   request write data
 //   mem_req_we      output 1    request is a write
-//   is_illegal      output 1    misaligned word or halfword access
+//   mem_req_wstrb   output 4    per-byte write enables, one bit per byte lane
+//   data_misaligned output 1    misaligned word or halfword access
 //   mem_rd_addr     output 5    destination register index for MEM/WB
 //   mem_reg_write   output 1    MEM/WB writes rd
 //   mem_wb_sel      output 2    MEM/WB writeback source select
@@ -35,9 +36,17 @@
 // `mem_rsp_rdata` is passed straight through to `mem_stage`.  This module owns
 // the load/store port pair only: instruction fetch has its own pair,
 // `if_req_*` / `if_rsp_*`, owned by `if_stage`, because phase 4 gives the core
-// separate L1 I$ and D$ that need independent bandwidth.  `is_illegal` is
-// raised for a misaligned word or halfword access rather than silently
-// performing the access.
+// separate L1 I$ and D$ that need independent bandwidth.
+//
+// `mem_req_wstrb` carries one enable bit per byte lane and is the only way a
+// sub-word store is expressed.  It is asserted for writes and driven to zero
+// for reads.  It is derived here, from `ex_mem_addr[1:0]` together with the
+// `ex_mem_size` this module already receives, so the derivation lives in one
+// place and `core` and the memory subsystem both see the same lanes.
+//
+// `data_misaligned` is raised for a misaligned word or halfword access rather
+// than silently performing the access.  `core` uses it to suppress the
+// MEM/WB register write; this module only reports the condition.
 //
 // Drop-in replaceable: this file currently holds only the frozen port list.
 // Replacing it with a real implementation must not change the port list and
@@ -71,7 +80,8 @@ module lsu (
   output wire [`p_ADDR_W-1:0]     mem_req_addr,
   output wire [`p_DATA_W-1:0]     mem_req_wdata,
   output wire                     mem_req_we,
-  output wire                     is_illegal,
+  output wire [3:0]               mem_req_wstrb,
+  output wire                     data_misaligned,
   output wire [`p_REG_ADDR_W-1:0] mem_rd_addr,
   output wire                     mem_reg_write,
   output wire [`p_WB_SEL_W-1:0]   mem_wb_sel
@@ -86,7 +96,8 @@ module lsu (
     assert (1'b0) else $error("not implemented: lsu.mem_req_addr");
     assert (1'b0) else $error("not implemented: lsu.mem_req_wdata");
     assert (1'b0) else $error("not implemented: lsu.mem_req_we");
-    assert (1'b0) else $error("not implemented: lsu.is_illegal");
+    assert (1'b0) else $error("not implemented: lsu.mem_req_wstrb");
+    assert (1'b0) else $error("not implemented: lsu.data_misaligned");
     assert (1'b0) else $error("not implemented: lsu.mem_rd_addr");
     assert (1'b0) else $error("not implemented: lsu.mem_reg_write");
     assert (1'b0) else $error("not implemented: lsu.mem_wb_sel");

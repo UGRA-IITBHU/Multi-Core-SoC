@@ -7,21 +7,26 @@
 // ports.  This header is therefore the single source of truth for where each
 // field lives, and the only place bundle widths are written down.
 //
-// Layout convention: bit 0 is the LSB of the bundle, fields grow upward from
-// the control byte, and each bundle lists `p_<BUNDLE>_W` as its total width.
+// Layout convention: bit 0 is the LSB of the bundle and fields grow upward.
+// Fields added after a bundle was frozen are appended ABOVE the existing ones,
+// so a previously frozen offset never moves.  Each bundle ends with
+// `p_<BUNDLE>_W`, its total width.
 //
-// Owners: controller (Phase 1, Task 1).  Frozen from this commit.
+// SCOPE: `localparam` is the required form for these constants, and `localparam`
+// only has module scope.  This header is therefore included INSIDE `module core`,
+// which is the only module that packs a bundle.  `defs.vh` and `ctrl_fields.vh`
+// stay macros so they remain usable in port widths at file scope.
+//
+// Owners: controller (Phase 1, Task 1).  Frozen.
 // ============================================================================
 `ifndef SOC_PIPELINE_REGS_VH
 `define SOC_PIPELINE_REGS_VH
 
-`include "defs.vh"
-`include "ctrl_fields.vh"
-
 // ===========================================================================
-// IF/ID bundle  (width 97)
+// IF/ID bundle  (width 98)
 //
-// Produced by `pc_gen` + `if_stage`, consumed by decode / regfile / imm_gen.
+// Produced by `core` from `pc_gen` + `if_stage`, consumed by decode / regfile /
+// imm_gen.  `valid` is bit 0 of `core`'s `stage_valid` output.
 // ===========================================================================
 `define p_IF_ID__PRED_TAKEN_LSB  0
 `define p_IF_ID__PRED_TAKEN_W    1
@@ -35,15 +40,19 @@
 `define p_IF_ID__INSTR_LSB       65
 `define p_IF_ID__INSTR_W         32
 
-`define p_IF_ID_W                97
+`define p_IF_ID__VALID_LSB       97
+`define p_IF_ID__VALID_W         1
+
+`define p_IF_ID_W                98
 
 // ===========================================================================
-// ID/EX bundle  (width 170)
+// ID/EX bundle  (width 171)
 //
 // Produced by `core` from `decode` control fields, `regfile` read data and
 // `imm_gen` output.  Consumed by `ex_stage`, `forwarding`, `hazard_unit`.
+// `valid` is bit 1 of `core`'s `stage_valid` output.
 // ===========================================================================
-// -- control byte -----------------------------------------------------------
+// -- control byte 0: memory control and writeback ---------------------------
 `define p_ID_EX__REG_WRITE_LSB   0
 `define p_ID_EX__REG_WRITE_W     1
 `define p_ID_EX__MEM_UNSIGNED_LSB 1
@@ -86,11 +95,9 @@
 `define p_ID_EX__PC_W            32
 
 // -- control class and register-field meaning -------------------------------
-// Added after the rest of the bundle was frozen, so these sit above `pc` and
-// no offset above changes.  `is_branch` / `is_jal` / `is_jalr` are what let
-// `ex_stage` resolve a branch or jump; `uses_rd` says whether the rd field is
-// meaningful; `is_illegal` is the decode verdict that an opcode or funct
-// encoding is not implemented.
+// `is_branch` / `is_jal` / `is_jalr` are what let `ex_stage` resolve a branch or
+// jump; `uses_rd` says whether the rd field is meaningful; `is_illegal` is the
+// decode verdict that an opcode or funct encoding is not implemented.
 `define p_ID_EX__IS_BRANCH_LSB   165
 `define p_ID_EX__IS_BRANCH_W     1
 `define p_ID_EX__IS_JAL_LSB      166
@@ -102,13 +109,17 @@
 `define p_ID_EX__USES_RD_LSB     169
 `define p_ID_EX__USES_RD_W       1
 
-`define p_ID_EX_W                170
+`define p_ID_EX__VALID_LSB       170
+`define p_ID_EX__VALID_W         1
+
+`define p_ID_EX_W                171
 
 // ===========================================================================
-// EX/MEM bundle  (width 108)
+// EX/MEM bundle  (width 109)
 //
 // Produced by `core` from `ex_stage` and `lsu` outputs.  Consumed by
 // `mem_stage`, and by `forwarding` / `hazard_unit` as the MEM-stage producer.
+// `valid` is bit 2 of `core`'s `stage_valid` output.
 // ===========================================================================
 `define p_EX_MEM__REG_WRITE_LSB  0
 `define p_EX_MEM__REG_WRITE_W    1
@@ -129,12 +140,17 @@
 `define p_EX_MEM__PC_LSB         76
 `define p_EX_MEM__PC_W           32
 
-`define p_EX_MEM_W               108
+`define p_EX_MEM__VALID_LSB      108
+`define p_EX_MEM__VALID_W        1
+
+`define p_EX_MEM_W               109
 
 // ===========================================================================
-// MEM/WB bundle  (width 70)
+// MEM/WB bundle  (width 71)
 //
-// Produced by `core` from `mem_stage` outputs.  Consumed by `wb_stage`.
+// Produced by `core` from `mem_stage` outputs, with `core` applying the
+// data-misalignment gating on `reg_write`.  Consumed by `wb_stage`.
+// `valid` is bit 3 of `core`'s `stage_valid` output.
 // ===========================================================================
 `define p_MEM_WB__REG_WRITE_LSB  0
 `define p_MEM_WB__REG_WRITE_W    1
@@ -145,6 +161,9 @@
 `define p_MEM_WB__PC_LSB         38
 `define p_MEM_WB__PC_W           32
 
-`define p_MEM_WB_W               70
+`define p_MEM_WB__VALID_LSB      70
+`define p_MEM_WB__VALID_W        1
+
+`define p_MEM_WB_W               71
 
 `endif // SOC_PIPELINE_REGS_VH

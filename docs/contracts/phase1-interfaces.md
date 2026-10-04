@@ -10,7 +10,24 @@ commit with no behavioural change alongside it.
 
 **Include form.** Every module includes its shared widths with a bare
 `` `include "defs.vh" `` — no relative path. The `+incdir` / `-I` path is
-supplied by the Makefile (Task 2). The three shared headers are:
+supplied by the Makefile (Task 2).
+
+**Deliberate relaxation of the "only `defs.vh` alongside" rule.** The drop-in
+rule means *no other module's source file*. It does **not** forbid the other two
+shared headers, and modules do include them where they need them:
+
+| Header | Form | Included | Why |
+|---|---|---|---|
+| `rtl/common/defs.vh` | macros | file scope, before the module | widths used in port declarations |
+| `rtl/core/ctrl_fields.vh` | macros | file scope, before the module | control-field widths used in port declarations |
+| `rtl/core/pipeline_regs.vh` | `localparam` | **inside** `module core` | bundle offsets; `localparam` has module scope only, and `core` is the only module that packs a bundle |
+
+`defs.vh` and `ctrl_fields.vh` must stay macros precisely because ANSI port
+widths need them at file scope, where `localparam` is not available.
+`pipeline_regs.vh` is the one header that is `localparam`, and no port list
+contains a bundle offset — a stage module's port list never contains a
+`p_<BUNDLE>__<field>` signal — so there is nothing for it to be used in at file
+scope. The three shared headers are:
 
 | Header | Contents |
 |---|---|
@@ -63,6 +80,10 @@ pc_gen ──► if_stage ───────────┴─► [IF/ID] ─
                                             wb_stage ──► regfile write port
                                                 │
                                             fwd_rd_* ──► forwarding
+
+                     stage_valid (bit0..3 = if_id/id_ex/ex_mem/mem_wb valid)
+                                │
+                          top level, verification only
 ```
 
 ---
@@ -216,8 +237,12 @@ meaningless rd field from producing a false register-index match.
 to writeback suppression is `core`'s job, because `core` owns the bundles. The
 frozen contract carries `is_illegal` in ID/EX only; which further bundle, if
 any, must also carry it is listed under *Known future contract changes*.
-Misaligned *data* accesses are a separate condition, reported by
-`lsu.is_illegal`.
+
+**What `is_illegal` does and does not cover.** It is the **canonical**
+illegal-instruction signal for the whole design: high when the opcode or a funct
+field encodes something this core does not implement. Two other misalignment
+conditions exist and neither uses this name, because they have different owners
+and different stages — see *Misalignment and illegality* below.
 
 ## 5. `imm_gen` — immediate generator
 
@@ -302,10 +327,17 @@ Combinational.
 | `ex_mem_unsigned` | out | 1 | load is unsigned |
 | `ex_redirect_valid` | out | 1 | fetch must redirect this cycle |
 | `ex_redirect_pc` | out | 32 | redirect target |
+| `ex_target_misaligned` | out | 1 | branch/JAL/JALR target is not 4-byte aligned |
 
 **Guarantee to `core`, `lsu` and `pc_gen`.** `ex_redirect_valid` is the only
 redirect source in the pipeline, resolved in this stage in the cycle the branch
 or jump is in EX, so `pc_gen` has exactly one funnel to obey.
+
+`ex_target_misaligned` reports a branch, JAL or JALR whose computed target is
+not 4-byte aligned. It is a **verdict, not a redirect**: `ex_redirect_pc` still
+carries the computed target, and it is `core`'s job to decide what an
+instruction-misaligned target means. It is unrelated to `lsu.data_misaligned`,
+which is the data-address condition.
 
 Branch and jump resolution needs nothing beyond this port list:
 `id_is_branch` / `id_is_jal` / `id_is_jalr` identify the instruction class,
@@ -343,7 +375,8 @@ granted, capture the returned data, and flag misaligned accesses.
 | `mem_req_addr` | out | 32 | request address |
 | `mem_req_wdata` | out | 32 | request write data |
 | `mem_req_we` | out | 1 | request is a write |
-| `is_illegal` | out | 1 | misaligned word or halfword access |
+| `mem_req_wstrb` | out | 4 | per-byte write enables, one bit per byte lane |
+| `data_misaligned` | out | 1 | misaligned word or halfword access |
 | `mem_rd_addr` | out | 5 | destination register index for MEM/WB |
 | `mem_reg_write` | out | 1 | MEM/WB writes rd |
 | `mem_wb_sel` | out | 2 | MEM/WB writeback source select |
@@ -354,8 +387,17 @@ cycle the request is presented until `mem_rsp_valid` is seen, and
 of that window, so memory may accept the request at its own pace.
 `mem_rsp_rdata` is passed straight through to `mem_stage`. This module owns the
 load/store port pair only: instruction fetch has its own pair, `if_req_*` /
-`if_rsp_*`, owned by `if_stage`. `is_illegal` is raised for a misaligned word or
-halfword access rather than silently performing the access.
+`if_rsp_*`, owned by `if_stage`.
+
+**`mem_req_wstrb` is the only way a sub-word store is expressed.** One enable bit
+per byte lane, asserted for writes and driven to zero for reads. `lsu` derives it
+from `ex_mem_addr[1:0]` together with the `ex_mem_size` it already receives, so
+the derivation lives in exactly one place and both `core` and the memory
+subsystem see the same lanes.
+
+`data_misaligned` is raised for a misaligned word or halfword access rather than
+silently performing the access. `core` uses it to suppress the MEM/WB register
+write; `lsu` only reports the condition.
 
 **Note.** `mem_req_*` and `mem_rsp_*` are also the top-level port names of
 `core`. Renaming them requires changing `core` in the same commit.
@@ -377,19 +419,31 @@ result into MEM/WB.
 | `mem_rd_addr` | in | 5 | destination register index |
 | `mem_reg_write` | in | 1 | the access writes rd |
 | `mem_wb_sel` | in | 2 | 0 = alu, 1 = mem, 2 = pc+4 |
-| `is_illegal` | in | 1 | misaligned access reported by `lsu` |
+| `lsu_data_misaligned` | in | 1 | misaligned access, verdict from `lsu` |
 | `mem_rd_data` | out | 32 | value written back to rd |
-| `mem_illegal` | out | 1 | an illegal access reached the memory stage |
+| `data_misaligned` | out | 1 | a misaligned data access reached this stage |
 
 **Guarantee to `wb_stage` and `forwarding`.** `mem_rd_data` is the single
 already-selected writeback value for this instruction, so `wb_stage` needs no
-multiplexer of its own; and `mem_reg_write` is forced low whenever
-`is_illegal` is high, so a misaligned access never commits a register write.
-`mem_illegal` is the same condition forwarded unchanged.
+multiplexer of its own.
 
-**Note for `core` (Task 8).** `core` must consume `mem_illegal`; leaving the
-signal unread will trip `-Wall` in `core.v` and, more importantly, silently
-drops the condition.
+**Guarantee to `core`: this module reports, it does not gate.** `mem_reg_write`
+is an *input* here, so `mem_stage` cannot gate it — a module cannot gate its own
+input. `core` applies the rule while packing the MEM/WB bundle:
+
+```
+mem_wb__reg_write = mem_reg_write && !mem_stage.data_misaligned
+```
+
+so a misaligned access never commits a register write, and the decision lives
+with the module that owns the bundle. `core` also wires `lsu.data_misaligned` to
+this module's `lsu_data_misaligned` input.
+
+**Note — naming.** The input is named for its source (`lsu_data_misaligned`, the
+same convention as `mem_rsp_rdata` and as `regfile`'s `wb_*` write port) and the
+output carries the plain condition name, so the two are never confused. Neither
+is an illegal-instruction condition: `decode.is_illegal` is that, with a
+different owner and a different stage.
 
 ## 10. `wb_stage` — writeback stage
 
@@ -401,8 +455,8 @@ Combinational.
 |---|---|---|---|
 | `mem_rd_data` | in | 32 | writeback value from `mem_stage` |
 | `mem_rd_addr` | in | 5 | destination register index |
-| `mem_reg_write` | in | 1 | the instruction writes rd |
-| `mem_illegal` | in | 1 | an illegal access reached the memory stage |
+| `mem_reg_write` | in | 1 | the instruction writes rd, already gated by `core` on data misalignment |
+| `data_misaligned` | in | 1 | a misaligned data access reached the memory stage |
 | `wb_we` | out | 1 | commit the register write this cycle |
 | `wb_wdata` | out | 32 | data to write |
 | `wb_waddr` | out | 5 | register to write |
@@ -411,20 +465,23 @@ Combinational.
 | `fwd_reg_write` | out | 1 | WB-stage forwarding value is valid |
 
 **Guarantee to `regfile` and `forwarding`.** `wb_we` is the single write enable
-for the whole pipeline and is low whenever `mem_reg_write` is low, whenever
-`mem_illegal` is high, or whenever `mem_rd_addr` is `x0`, so writes to `x0` are
-discarded. `fwd_reg_write` carries that same `x0` exclusion, so `forwarding`
-can never forward `x0` as an architectural value; `regfile` discards `x0`
-writes independently, so the discard is enforced at both ends of the writeback
-path.
+for the whole pipeline and is low whenever `mem_reg_write` is low or whenever
+`mem_rd_addr` is `x0`, so writes to `x0` are discarded. `fwd_reg_write` carries
+that same `x0` exclusion, so `forwarding` can never forward `x0` as an
+architectural value; `regfile` discards `x0` writes independently, so the discard
+is enforced at both ends of the writeback path.
+
+The data-misalignment case needs **no gate here**: `core` has already folded it
+into `mem_reg_write` while packing the MEM/WB bundle, so
+`wb_we = mem_reg_write && (mem_rd_addr != x0)` and nothing more.
 
 **Note.** Purely combinational in phase 1: the MEM/WB pipeline register lives
 in `mem_stage`, which owns the memory-stage timing.
 
 ## 11. `hazard_unit` — hazard detector
 
-**Purpose.** Report the decode-stage stall needed for a load-use hazard and the
-execute-stage stall needed while the memory stage is busy. Combinational.
+**Purpose.** Report the decode-stage stall needed for a load-use hazard. That is
+the module's whole job. Combinatorial.
 
 | Port | Dir | Width | Meaning |
 |---|---|---|---|
@@ -435,21 +492,20 @@ execute-stage stall needed while the memory stage is busy. Combinational.
 | `ex_mem_read` | in | 1 | EX/MEM instruction is a load |
 | `ex_mem_write` | in | 1 | EX/MEM instruction is a store |
 | `ex_rd_addr` | in | 5 | rd of the EX/MEM instruction |
-| `mem_rsp_valid` | in | 1 | memory has not yet returned the outstanding data |
 | `id_stall` | out | 1 | hold the decode stage this cycle |
-| `ex_stall_from_mem` | out | 1 | hold the execute stage this cycle |
 
 **Guarantee to `core`.** `id_stall` is asserted for exactly one cycle per
-load-use dependency and covers every non-forwardable case;
-`ex_stall_from_mem` is asserted for exactly as long as the memory stage holds
-an outstanding data access, so a single-cycle memory response produces no stall
-at all. Both outputs are combinational over the listed inputs only; there is
-no hidden pipeline state.
+load-use dependency and covers every non-forwardable case. It is combinational
+over the listed inputs only; there is no hidden pipeline state.
 
-**Note.** There is deliberately **no `wb_stall` output**. In phase 1 the
-memory stage is a single-cycle pass-through, so nothing downstream of writeback
-could consume such a signal. Adding it later is a contract change under the
-gate above.
+**Note — no MEM stall, no `wb_stall`.** There is deliberately **no
+`ex_stall_from_mem` output**. A MEM stall is `mem_req_valid && !mem_rsp_valid`,
+and `core` derives it directly because `core` owns both the memory request and
+the stall chain. A previous revision gave this module a `mem_rsp_valid` input
+with the **opposite sense** to the identically named signal at `lsu` and `core`
+— that input has been removed rather than repeated. There is also **no
+`wb_stall` output**: in phase 1 the memory stage is a single-cycle pass-through,
+so nothing downstream of writeback could consume such a signal.
 
 ## 12. `forwarding` — operand forwarding network
 
@@ -461,8 +517,6 @@ Combinational.
 |---|---|---|---|
 | `ex_rs1_addr` | in | 5 | rs1 index of the instruction in execute |
 | `ex_rs2_addr` | in | 5 | rs2 index of the instruction in execute |
-| `id_rs1_addr` | in | 5 | rs1 index of the instruction in decode |
-| `id_rs2_addr` | in | 5 | rs2 index of the instruction in decode |
 | `id_uses_rs1` | in | 1 | the decode instruction reads rs1 |
 | `id_uses_rs2` | in | 1 | the decode instruction reads rs2 |
 | `mem_rd_addr` | in | 5 | destination of the MEM-stage value |
@@ -481,9 +535,13 @@ the newest value written to `ex_rs1_addr` by any earlier instruction, and
 `fwd_rs1_valid` is low when no forwarding is needed. Where both the MEM and
 the WB stage can supply the operand, the MEM stage wins because it is the
 younger value. `x0` is never forwarded: `mem_reg_write` and `fwd_reg_write`
-already exclude `x0` at their producers. The decode-stage `id_rs1_addr` /
-`id_rs2_addr` inputs are present so that a hazard which cannot be forwarded is
-reported to `core` rather than silently mis-resolved.
+already exclude `x0` at their producers. When `id_uses_rs1` / `id_uses_rs2` is
+low the corresponding forwarded operand is driven to zero.
+
+**Note.** This module has **no `id_rs1_addr` / `id_rs2_addr` input**. A previous
+revision carried them on the strength of a hazard report that none of the four
+outputs expresses; `hazard_unit` takes its own copies of the decode-stage
+indices for the load-use interlock, which is their only consumer.
 
 ## 13. `core` — top level
 
@@ -504,6 +562,8 @@ registers, and expose both memory port pairs to the outside world.
 | `mem_req_addr` | out | 32 | request address |
 | `mem_req_wdata` | out | 32 | request write data |
 | `mem_req_we` | out | 1 | request is a write |
+| `mem_req_wstrb` | out | 4 | per-byte write enables, one bit per byte lane |
+| `stage_valid` | out | 4 | verification observability, see below |
 
 **Guarantee to the surrounding system.** Both memory interfaces are exposed at
 the top level under exactly the names their owners use for them — the fetch pair
@@ -561,7 +621,7 @@ through to its owner with no arbitration between them.
 | `mem_rsp_rdata` | in | 32 | memory, consumed by `lsu` | top-level `mem_rsp_rdata` |
 | `mem_rsp_valid` | in | 1 | memory, consumed by `lsu` | top-level `mem_rsp_valid` |
 
-### IF/ID (width 97) — packed by `core` from `pc_gen` + `if_stage`
+### IF/ID (width 98) — packed by `core` from `pc_gen` + `if_stage`
 
 | Field | Width | Offset | Produced by |
 |---|---|---|---|
@@ -569,8 +629,9 @@ through to its owner with no arbitration between them.
 | `pc` | 32 | 1 | `pc_gen` |
 | `pred_pc` | 32 | 33 | `if_stage` |
 | `instr` | 32 | 65 | `if_stage` |
+| `valid` | 1 | 97 | `core` (`stage_valid[0]`) |
 
-### ID/EX (width 170) — packed by `core`
+### ID/EX (width 171) — packed by `core`
 
 | Field | Width | Offset | Produced by |
 |---|---|---|---|
@@ -586,9 +647,9 @@ through to its owner with no arbitration between them.
 | `op2_sel` | 3 | 13 | `decode` |
 | `op1_sel` | 2 | 16 | `decode` |
 | `alu_op` | 4 | 18 | `decode` |
-| `rd_addr` | 5 | 22 | `decode` (instruction bits) |
-| `rs2_addr` | 5 | 27 | `decode` (instruction bits) |
-| `rs1_addr` | 5 | 32 | `decode` (instruction bits) |
+| `rd_addr` | 5 | 22 | **`core`**, from `instr[11:7]` |
+| `rs2_addr` | 5 | 27 | **`core`**, from `instr[24:20]` |
+| `rs1_addr` | 5 | 32 | **`core`**, from `instr[19:15]` |
 | `imm` | 32 | 37 | `imm_gen` |
 | `rs2_data` | 32 | 69 | `regfile` |
 | `rs1_data` | 32 | 101 | `regfile` |
@@ -598,6 +659,7 @@ through to its owner with no arbitration between them.
 | `is_jalr` | 1 | 167 | `decode` |
 | `is_illegal` | 1 | 168 | `decode` |
 | `uses_rd` | 1 | 169 | `decode` |
+| `valid` | 1 | 170 | `core` (`stage_valid[1]`) |
 
 The five fields above `pc` were added after the rest of the bundle was frozen,
 so they sit at the top of ID/EX and **no previously frozen offset moves**. All
@@ -606,7 +668,24 @@ five are produced by `decode` and routed into the bundle by `core`.
 `id_is_jal` / `id_is_jalr`; `uses_rd` reaches it as `id_uses_rd`; `is_illegal` is
 read by `core` out of the bundle it owns.
 
-### EX/MEM (width 108) — packed by `core` from `ex_stage` + `lsu`
+Three fields in these tables are produced by **wiring inside `core`**, not by any
+stage module, because the value is already in `core`'s hands or is a fixed bit
+range:
+
+| Field | How `core` produces it |
+|---|---|
+| `id_ex__rs1_addr`, `id_ex__rs2_addr`, `id_ex__rd_addr` | straight off the instruction word: `instr[19:15]`, `instr[24:20]`, `instr[11:7]`. `core` supplies the same three values to `regfile` in ID. `decode` deliberately has **no** address outputs: extracting three fixed bit ranges is wiring, not decoding. |
+| `ex_mem__pc` | copied from `id_ex__pc`. `ex_stage` has no `pc` output because the value would be a pure passthrough of something `core` already holds. |
+| `mem_wb__reg_write` | `mem_reg_write && !mem_stage.data_misaligned`, applied while packing because `mem_stage` cannot gate its own input. |
+
+The four `valid` bits are likewise `core`'s: each is a real field of its bundle,
+forced low while `rst_n` is asserted, and published at the top level on
+`core.stage_valid` (bit 0 = `if_id__valid` … bit 3 = `mem_wb__valid`) so a
+testbench can check the reset-validity guarantee without a hierarchical
+reference. `stage_valid` is a verification-observability port and stays through
+phase 10.
+
+### EX/MEM (width 109) — packed by `core` from `ex_stage` + `lsu`
 
 | Field | Width | Offset | Produced by |
 |---|---|---|---|
@@ -618,18 +697,60 @@ read by `core` out of the bundle it owns.
 | `rd_addr` | 5 | 7 | `ex_stage` |
 | `store_data` | 32 | 12 | `ex_stage` |
 | `alu_result` | 32 | 44 | `ex_stage` |
-| `pc` | 32 | 76 | `ex_stage` (`id_pc`, registered) |
+| `pc` | 32 | 76 | **`core`**, copied from `id_ex__pc` |
+| `valid` | 1 | 108 | `core` (`stage_valid[2]`) |
 
-### MEM/WB (width 70) — packed by `core` from `mem_stage`
+### MEM/WB (width 71) — packed by `core` from `mem_stage`
 
 | Field | Width | Offset | Produced by |
 |---|---|---|---|
-| `reg_write` | 1 | 0 | `mem_stage` (`mem_reg_write`, with `is_illegal` gating) |
+| `reg_write` | 1 | 0 | **`core`**: `mem_reg_write && !mem_stage.data_misaligned` |
 | `rd_addr` | 5 | 1 | `mem_stage` (`mem_rd_addr`) |
 | `rd_data` | 32 | 6 | `mem_stage` (`mem_rd_data`) |
 | `pc` | 32 | 38 | `mem_stage` (`mem_pc`) |
+| `valid` | 1 | 70 | `core` (`stage_valid[3]`) |
 
 ---
+
+## Authoritative signal names
+
+The plan's interface lines for Tasks 3–8 predate this contract and disagree with
+it in several places. **This section is authoritative.** When aligning the plan,
+use these names exactly.
+
+| Concern | Authoritative names | Not to be used |
+|---|---|---|
+| ALU operand select | `decode.op1_sel`, `decode.op2_sel` (2 and 3 bits) | `alu_src_imm` |
+| Register writeback port | `wb_stage.wb_waddr`, `wb_stage.wb_wdata`, `wb_stage.wb_we` | `rd_addr`, `rd_data`, `rd_we` |
+| Register writeback port, `regfile` side | `regfile.wb_we`, `regfile.wb_waddr`, `regfile.wb_wdata` | as above |
+| IF/ID packing | packed by **`core`**. `if_stage` outputs discrete `instr`, `pred_taken`, `pred_pc` plus the fetch pair | `if_stage` producing `if_id__pc`, `if_id__instr`, `if_id__valid` |
+| Load / writeback mux | owned by **`mem_stage`**, which outputs the single selected `mem_rd_data` | `wb_stage` owning the load mux |
+| Hazard detection | `hazard_unit.id_stall` (7 inputs, 1 output) | `ex_stall_from_mem`, `wb_stall`, a `mem_rsp_valid` input |
+| Forwarding network | `forwarding.fwd_rs1_valid`, `fwd_rs1_data`, `fwd_rs2_valid`, `fwd_rs2_data` | any other four names |
+| Forwarding, MEM source | `mem_stage.mem_rd_addr`, `mem_rd_data`, `mem_reg_write` | — |
+| Forwarding, WB source | `wb_stage.fwd_rd_addr`, `fwd_rd_data`, `fwd_reg_write` | — |
+| Forwarding into execute | `ex_stage.ex_rs1_data`, `ex_stage.ex_rs2_data` | — |
+
+Complete `hazard_unit` port list: `id_uses_rs1`, `id_uses_rs2`, `id_rs1_addr`,
+`id_rs2_addr`, `ex_mem_read`, `ex_mem_write`, `ex_rd_addr` → `id_stall`.
+
+Complete `forwarding` port list: `ex_rs1_addr`, `ex_rs2_addr`, `id_uses_rs1`,
+`id_uses_rs2`, `mem_rd_addr`, `mem_rd_data`, `mem_reg_write`, `fwd_rd_addr`,
+`fwd_rd_data`, `fwd_reg_write` → `fwd_rs1_valid`, `fwd_rs1_data`,
+`fwd_rs2_valid`, `fwd_rs2_data`.
+
+### Misalignment and illegality — three distinct signals
+
+One identifier previously meant three unrelated things. They are now distinct:
+
+| Signal | Owner | Condition |
+|---|---|---|
+| `decode.is_illegal` | `decode` | opcode or funct encoding not implemented — **the canonical illegal-instruction signal** |
+| `lsu.data_misaligned` | `lsu` | misaligned **data** access (load or store) |
+| `ex_stage.ex_target_misaligned` | `ex_stage` | misaligned branch / JAL / JALR **target** |
+| `mem_stage.data_misaligned` | `mem_stage` | `lsu`'s data verdict as seen by the memory stage |
+
+None of the three may be wired to another under a shared name.
 
 ## Module ownership
 
@@ -647,13 +768,13 @@ read by `core` out of the bundle it owns.
 These are deliberately *not* in the frozen port lists. Each will need a
 contract change under the gate above when its phase lands.
 
-- **`decode.is_illegal` is now present** as of the second contract change; it is
-  a frozen `decode` output and rides in ID/EX. What remains genuinely future is
-  the *consumption* side: whether `is_illegal` must also ride in EX/MEM or
-  MEM/WB so that an unimplemented instruction can be prevented from writing the
-  register file, and whatever top-level trap signalling a phase needs. Today
-  `lsu.is_illegal` and `mem_stage.mem_illegal` still cover *misaligned data
-  accesses* only.
+- **`decode.is_illegal` is now present** and frozen; it is a `decode` output and
+  rides in ID/EX. What remains genuinely future is the *consumption* side:
+  whether `is_illegal` must also ride in EX/MEM or MEM/WB so an unimplemented
+  instruction can be prevented from writing the register file, and whatever
+  top-level trap signalling a phase needs.
+- **Consuming `ex_stage.ex_target_misaligned`.** The verdict is frozen and
+  available; what it *means* (trap, or redirect to a handler) is not yet decided.
 - **`wb_stall`.** Only meaningful once the memory stage is no longer a
   single-cycle pass-through.
 - **Program loading.** A top-level path for getting a program into the design.

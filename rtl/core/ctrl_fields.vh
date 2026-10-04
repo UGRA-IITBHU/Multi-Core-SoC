@@ -55,10 +55,10 @@
 // high for any instruction.  `is_illegal` is independent of them - an
 // unimplemented encoding sets `is_illegal` and none of the three.
 //
-// The single-bit control fields are packed into whole bytes inside the stage
-// bundles; pipeline_regs.vh places byte 0 (the memory-control and writeback
-// group) at the bottom of ID/EX and EX/MEM, and byte 1 (the control-class and
-// register-field-meaning group) above them in ID/EX only.
-`define c_CTRL_BYTE_W   8
+// These single-bit control fields are not byte-aligned in the bundles.
+// pipeline_regs.vh places the memory-control and writeback group at the bottom
+// of ID/EX and EX/MEM, and the control-class and register-field-meaning group
+// (`is_branch`, `is_jal`, `is_jalr`, `is_illegal`, `uses_rd`) above `pc` in ID/EX.
+// Read the offsets from pipeline_regs.vh; do not compute them here.
 
 `endif // SOC_CTRL_FIELDS_VH

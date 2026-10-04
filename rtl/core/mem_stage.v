@@ -1,9 +1,9 @@
 // ============================================================================
-// mem_stage - memory stage and owner of the MEM/WB pipeline register.
+// mem_stage - memory stage, owner of the MEM/WB pipeline register.
 //
 // Purpose: take the single-cycle data-memory response, select the value that
-// will be written back, suppress writeback of an illegal access, and register
-// the result into MEM/WB.
+// will be written back, report a misaligned data access, and hand the result
+// to `core` to be registered into MEM/WB.
 //
 // Ports (frozen; see docs/contracts/phase1-interfaces.md):
 //   clk             input  1    rising-edge clock
@@ -15,16 +15,26 @@
 //   mem_rd_addr     input  5    destination register index
 //   mem_reg_write   input  1    the access writes rd
 //   mem_wb_sel      input  2    0 = alu, 1 = mem, 2 = pc+4
-//   is_illegal      input  1    misaligned access reported by `lsu`
+//   lsu_data_misaligned input 1  misaligned access, verdict from `lsu`
 //   mem_rd_data     output 32   value written back to rd
-//   mem_illegal     output 1    an illegal access reached the memory stage
+//   data_misaligned output 1    a misaligned data access reached this stage
+//
+// Note - naming: the input is named for its source (`lsu_data_misaligned`, the
+// same source-naming convention as `mem_rsp_rdata` and as `regfile`'s
+// `wb_*` write port) and the output carries the plain condition name, so the two
+// are never confused.  Neither is an illegal-instruction condition:
+// `decode.is_illegal` is that, and it has a different owner.
 //
 // Guarantee to `wb_stage` and `forwarding`: `mem_rd_data` is the single
 // already-selected writeback value for this instruction, so `wb_stage` needs no
-// multiplexer of its own; and `mem_reg_write` is forced low whenever
-// `is_illegal` is high, so a misaligned access never commits a register
-// write.  `mem_illegal` is the same condition forwarded unchanged, and `core`
-// must consume it so the condition is never silently dropped.
+// multiplexer of its own.
+//
+// Guarantee to `core`: this module REPORTS a misaligned data access, it does not
+// gate anything.  `mem_reg_write` is an input here, so this module cannot gate
+// it - `core` applies the rule while packing the MEM/WB bundle:
+// `mem_wb__reg_write = mem_reg_write && !mem_stage.data_misaligned`.  A
+// misaligned access therefore never commits a register write, and the decision
+// lives with the module that owns the bundle.
 //
 // Drop-in replaceable: this file currently holds only the frozen port list.
 // Replacing it with a real implementation must not change the port list and
@@ -47,9 +57,9 @@ module mem_stage (
   input  wire [`p_REG_ADDR_W-1:0] mem_rd_addr,
   input  wire                     mem_reg_write,
   input  wire [`p_WB_SEL_W-1:0]   mem_wb_sel,
-  input  wire                     is_illegal,
+  input  wire                     lsu_data_misaligned,
   output wire [`p_XLEN-1:0]       mem_rd_data,
-  output wire                     mem_illegal
+  output wire                     data_misaligned
 );
 /* verilator lint_on UNUSEDSIGNAL */
 /* verilator lint_on UNDRIVEN */
@@ -58,7 +68,7 @@ module mem_stage (
   // as not implemented until the memory block is built.
   always @(posedge clk) begin
     assert (1'b0) else $error("not implemented: mem_stage.mem_rd_data");
-    assert (1'b0) else $error("not implemented: mem_stage.mem_illegal");
+    assert (1'b0) else $error("not implemented: mem_stage.data_misaligned");
   end
 
 endmodule

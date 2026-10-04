@@ -8,8 +8,9 @@
 // Ports (frozen; see docs/contracts/phase1-interfaces.md):
 //   mem_rd_data     input  32  writeback value from `mem_stage`
 //   mem_rd_addr     input  5   destination register index
-//   mem_reg_write   input  1   the instruction writes rd
-//   mem_illegal     input  1   an illegal access reached the memory stage
+//   mem_reg_write   input  1   the instruction writes rd, already gated by
+//                               `core` on data misalignment
+//   data_misaligned input  1   a misaligned data access reached the memory stage
 //   wb_we           output 1   commit the register write this cycle
 //   wb_wdata        output 32  data to write
 //   wb_waddr        output 5   register to write
@@ -18,12 +19,16 @@
 //   fwd_reg_write   output 1   WB-stage forwarding value is valid
 //
 // Guarantee to `regfile` and `forwarding`: `wb_we` is the single write enable
-// for the whole pipeline and is low whenever `mem_reg_write` is low, whenever
-// `mem_illegal` is high, or whenever `mem_rd_addr` is `x0`, so writes to `x0`
-// are discarded.  `fwd_reg_write` carries that same `x0` exclusion, so
-// `forwarding` can never forward `x0` as an architectural value; the
-// register file discards `x0` writes independently, so the discard is
-// enforced at both ends of the writeback path.
+// for the whole pipeline and is low whenever `mem_reg_write` is low or whenever
+// `mem_rd_addr` is `x0`, so writes to `x0` are discarded.  `fwd_reg_write`
+// carries that same `x0` exclusion, so `forwarding` can never forward `x0` as an
+// architectural value; the register file discards `x0` writes independently, so
+// the discard is enforced at both ends of the writeback path.
+//
+// The data-misalignment case needs no gate here: `core` has already folded it
+// into `mem_reg_write` while packing the MEM/WB bundle, so
+// `wb_we = mem_reg_write && (mem_rd_addr != x0)` and nothing more.  A module
+// cannot gate its own input, which is why that rule lives in `core`.
 //
 // Note: this module is purely combinational in phase 1; the MEM/WB pipeline
 // register lives in `mem_stage`, which owns the memory stage timing.
@@ -42,7 +47,7 @@ module wb_stage (
   input  wire [`p_XLEN-1:0]       mem_rd_data,
   input  wire [`p_REG_ADDR_W-1:0] mem_rd_addr,
   input  wire                     mem_reg_write,
-  input  wire                     mem_illegal,
+  input  wire                     data_misaligned,
   output wire                     wb_we,
   output wire [`p_XLEN-1:0]       wb_wdata,
   output wire [`p_REG_ADDR_W-1:0] wb_waddr,

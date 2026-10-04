@@ -31,10 +31,15 @@
 // encoding is 0 = I, 1 = S, 2 = B, 3 = U, 4 = J.  `mem_size` is meaningful
 // only when `mem_read` or `mem_write` is high, and is `0` otherwise.
 //
-// Note: illegal *instruction* encodings are not diagnosed in phase 1.
-// Instruction-legality trapping belongs to a later phase, and freezing an
-// unused trap output now would constrain every downstream owner for nothing.
-// Misaligned *data* accesses are diagnosed by `lsu.is_illegal`.
+// Note - what `is_illegal` does and does not cover.  It is the CANONICAL
+// illegal-instruction signal for the whole design: high when the opcode or a
+// funct field encodes something this core does not implement.  Two other
+// misalignment conditions exist and neither uses this name, because they have
+// different owners and different stages: `lsu.data_misaligned` is a misaligned
+// *data* access, and `ex_stage.ex_target_misaligned` is a misaligned branch,
+// JAL or JALR *target*.  Carrying `is_illegal` on to a trap or to writeback
+// suppression is `core`'s job, because `core` owns the bundles; see
+// docs/contracts/phase1-interfaces.md.
 //
 // Drop-in replaceable: this file currently holds only the frozen port list.
 // Replacing it with a real implementation must not change the port list and
