@@ -20,9 +20,9 @@
 // `redirect_valid` takes priority over both `pred_taken` and the sequential
 // +4 step in the same cycle it is presented.
 //
-// Note: `pc_gen` deliberately has no memory-response port.  Instruction and
-// data memory handshakes are owned elsewhere, so fetch stalls can only reach
-// this module through `stall`.
+// Note: `pc_gen` deliberately has no memory-response port.  The instruction
+// fetch handshake belongs to `if_stage` and the load/store handshake to `lsu`,
+// so a fetch stall can only reach this module through `stall`.
 //
 // Drop-in replaceable: this file currently holds only the frozen port list.
 // Replacing it with a real implementation must not change the port list and

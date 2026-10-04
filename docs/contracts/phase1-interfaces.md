@@ -42,7 +42,9 @@ while a body is empty.
 ## Stage overview
 
 ```
-pc_gen ──► if_stage ──► [IF/ID] ──► regfile ──► decode ──► imm_gen
+                     if_req_* / if_rsp_*  (top level)
+                                │
+pc_gen ──► if_stage ───────────┴─► [IF/ID] ──► regfile ──► decode ──► imm_gen
                                 │                          │
                                 └────────── [ID/EX] ◄──────┘
                                                 │
@@ -87,14 +89,15 @@ currently being fetched; while `stall` is high `pc` does not advance, and
 `redirect_valid` takes priority over both `pred_taken` and the sequential +4
 step in the same cycle it is presented.
 
-**Note.** `pc_gen` has no memory-response port. The data memory interface has
-exactly one owner, `lsu`, and instruction fetch stalls reach this module only
-through `stall`.
+**Note.** `pc_gen` has no memory-response port. The instruction-fetch handshake
+belongs to `if_stage` and the load/store handshake to `lsu`, so a fetch stall
+reaches this module only through `stall`.
 
 ## 2. `if_stage` — instruction fetch
 
-**Purpose.** Turn the address from `pc_gen` into an instruction word and
-publish the static next-PC prediction that `pc_gen` consumes.
+**Purpose.** Turn the address from `pc_gen` into an instruction word over the
+instruction-fetch memory port, and publish the static next-PC prediction that
+`pc_gen` consumes. This module owns the instruction-fetch port pair.
 
 | Port | Dir | Width | Meaning |
 |---|---|---|---|
@@ -103,6 +106,10 @@ publish the static next-PC prediction that `pc_gen` consumes.
 | `stall` | in | 1 | hold the fetched instruction |
 | `flush` | in | 1 | discard the fetched instruction (wrong path) |
 | `pc` | in | 32 | address from `pc_gen` |
+| `if_rsp_rdata` | in | 32 | instruction word returned by fetch memory |
+| `if_rsp_valid` | in | 1 | fetch memory has returned an instruction |
+| `if_req_valid` | out | 1 | request is being presented to fetch memory |
+| `if_req_addr` | out | 32 | request address |
 | `instr` | out | 32 | instruction word handed to decode |
 | `pred_taken` | out | 1 | static prediction is a taken branch |
 | `pred_pc` | out | 32 | predicted next PC |
@@ -112,11 +119,22 @@ are both low, `instr` is the instruction at `pc`; when `flush` is high the
 instruction in flight is squashed so the following stage sees no stale
 instruction. `pred_taken` and `pred_pc` are the only prediction state.
 
-**Note — instruction memory is internal.** Instruction memory is an
-implementation detail of `if_stage`, not a port. `core`'s top-level port list
-is frozen to the data memory interface alone, so there is deliberately no
-top-level program-loading port in phase 1. That arrives with the memory
-subsystem.
+**Guarantee to fetch memory.** `if_req_valid` stays high from the cycle the
+request is presented until `if_rsp_valid` is seen, and `if_req_addr` remains
+stable for the whole of that window, so fetch memory may accept the request at
+its own pace.
+
+**Note — two ports, one address space.** Instruction fetch has its own port
+pair (`if_req_*` / `if_rsp_*`) rather than sharing `mem_req_*` / `mem_rsp_*` with
+`lsu`, even though both address the same unified memory. Phase 4 gives the core
+separate L1 I$ and D$ that need independent bandwidth; a single arbitrated port
+would force the fetch path to be redesigned then, and would stall instruction
+fetch whenever the load/store unit is active. The data memory port therefore
+has **two owners**: `if_stage` for fetch and `lsu` for load/store. The same pair
+is exposed at the top level by `core`.
+
+**Note.** `if_req_*` and `if_rsp_*` are also the top-level port names of `core`.
+Renaming them requires changing `core` in the same commit.
 
 ## 3. `regfile` — 32×32 register file
 
@@ -299,9 +317,10 @@ granted, capture the returned data, and flag misaligned accesses.
 cycle the request is presented until `mem_rsp_valid` is seen, and
 `mem_req_addr`, `mem_req_wdata` and `mem_req_we` remain stable for the whole
 of that window, so memory may accept the request at its own pace.
-`mem_rsp_rdata` is passed straight through to `mem_stage`, so the data memory
-interface has exactly one owner. `is_illegal` is raised for a misaligned word
-or halfword access rather than silently performing the access.
+`mem_rsp_rdata` is passed straight through to `mem_stage`. This module owns the
+load/store port pair only: instruction fetch has its own pair, `if_req_*` /
+`if_rsp_*`, owned by `if_stage`. `is_illegal` is raised for a misaligned word or
+halfword access rather than silently performing the access.
 
 **Note.** `mem_req_*` and `mem_rsp_*` are also the top-level port names of
 `core`. Renaming them requires changing `core` in the same commit.
@@ -434,23 +453,32 @@ reported to `core` rather than silently mis-resolved.
 ## 13. `core` — top level
 
 **Purpose.** Instantiate and connect the whole pipeline, own the four pipeline
-registers, and expose the data memory interface to the outside world.
+registers, and expose both memory port pairs to the outside world.
 
 | Port | Dir | Width | Meaning |
 |---|---|---|---|
 | `clk` | in | 1 | rising-edge clock |
 | `rst_n` | in | 1 | active-low synchronous reset |
+| `if_rsp_rdata` | in | 32 | instruction returned by fetch memory |
+| `if_rsp_valid` | in | 1 | fetch memory has returned an instruction |
 | `mem_rsp_rdata` | in | 32 | data returned by memory |
 | `mem_rsp_valid` | in | 1 | memory has returned data |
+| `if_req_valid` | out | 1 | fetch request is being presented to memory |
+| `if_req_addr` | out | 32 | fetch request address |
 | `mem_req_valid` | out | 1 | request is being presented to memory |
 | `mem_req_addr` | out | 32 | request address |
 | `mem_req_wdata` | out | 32 | request write data |
 | `mem_req_we` | out | 1 | request is a write |
 
-**Guarantee to the surrounding system.** The data memory interface is exposed
-at the top level under exactly the names `lsu` uses for it, so a memory
-subsystem or an AXI bridge attaches without any hierarchical reference into
-this design.
+**Guarantee to the surrounding system.** Both memory interfaces are exposed at
+the top level under exactly the names their owners use for them — the fetch pair
+exactly as `if_stage` names it, the load/store pair exactly as `lsu` names it —
+so a memory subsystem or an AXI bridge attaches without any hierarchical
+reference into this design.
+
+**Note — two ports, one address space.** See the note on `if_stage`. The top
+level exposes a fetch pair and a load/store pair rather than one arbitrated
+memory port.
 
 **Note.** This is the one module that instantiates the other twelve, and the
 one module that owns all bundle packing.
@@ -464,6 +492,25 @@ tables below name which owner produces each field, so that no stage-module
 owner assumes they are also packing a bundle. **No module other than `core`
 packs a bundle.** `id_ex__*` in particular is assembled by `core` from `decode`
 control fields, `regfile` read data and `imm_gen` output.
+
+### Top-level memory ports — who owns which pair
+
+Two port pairs over one unified address space. `core` exposes both at the top
+level under the same names their owners use, and `core` wires each pair straight
+through to its owner with no arbitration between them.
+
+| Signal | Dir | Width | Owner | Feeds |
+|---|---|---|---|---|
+| `if_req_valid` | out | 1 | `if_stage` | top-level `if_req_valid` |
+| `if_req_addr` | out | 32 | `if_stage` | top-level `if_req_addr` |
+| `if_rsp_rdata` | in | 32 | fetch memory, consumed by `if_stage` | top-level `if_rsp_rdata` |
+| `if_rsp_valid` | in | 1 | fetch memory, consumed by `if_stage` | top-level `if_rsp_valid` |
+| `mem_req_valid` | out | 1 | `lsu` | top-level `mem_req_valid` |
+| `mem_req_addr` | out | 32 | `lsu` | top-level `mem_req_addr` |
+| `mem_req_wdata` | out | 32 | `lsu` | top-level `mem_req_wdata` |
+| `mem_req_we` | out | 1 | `lsu` | top-level `mem_req_we` |
+| `mem_rsp_rdata` | in | 32 | memory, consumed by `lsu` | top-level `mem_rsp_rdata` |
+| `mem_rsp_valid` | in | 1 | memory, consumed by `lsu` | top-level `mem_rsp_valid` |
 
 ### IF/ID (width 97) — packed by `core` from `pc_gen` + `if_stage`
 
@@ -539,11 +586,14 @@ control fields, `regfile` read data and `imm_gen` output.
 These are deliberately *not* in the frozen port lists. Each will need a
 contract change under the gate above when its phase lands.
 
-- **Instruction-legality trap.** A `decode` output for an unsupported
-  encoding, plus whatever top-level trap signalling a phase needs. `lsu`'s
-  `is_illegal` covers misalignment only.
+- **Instruction-legality trap (`decode.is_illegal`).** Not in the frozen port
+  list. `decode` currently has no illegal-encoding output; `lsu.is_illegal` and
+  `mem_stage.mem_illegal` cover *misaligned data accesses* only. A
+  `decode.is_illegal` output plus whatever top-level trap signalling a phase
+  needs is still outstanding and awaits sign-off — note it would have to be
+  threaded through ID/EX and EX/MEM and consumed by `mem_stage`, not added as a
+  single port.
 - **`wb_stall`.** Only meaningful once the memory stage is no longer a
   single-cycle pass-through.
-- **Instruction fetch memory port.** Needed once instruction memory becomes
-  external rather than internal to `if_stage`.
 - **Program loading.** A top-level path for getting a program into the design.
+  The fetch port pair carries instruction *reads* only.

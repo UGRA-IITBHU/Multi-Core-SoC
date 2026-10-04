@@ -32,10 +32,12 @@
 // cycle the request is presented until `mem_rsp_valid` is seen, and
 // `mem_req_addr`, `mem_req_wdata` and `mem_req_we` remain stable for the
 // whole of that window, so memory may accept the request at its own pace.
-// `mem_rsp_rdata` is passed straight through to `mem_stage`, so the data
-// memory interface has exactly one owner.  `is_illegal` is raised for a
-// misaligned word or halfword access rather than silently performing the
-// access.
+// `mem_rsp_rdata` is passed straight through to `mem_stage`.  This module owns
+// the load/store port pair only: instruction fetch has its own pair,
+// `if_req_*` / `if_rsp_*`, owned by `if_stage`, because phase 4 gives the core
+// separate L1 I$ and D$ that need independent bandwidth.  `is_illegal` is
+// raised for a misaligned word or halfword access rather than silently
+// performing the access.
 //
 // Drop-in replaceable: this file currently holds only the frozen port list.
 // Replacing it with a real implementation must not change the port list and

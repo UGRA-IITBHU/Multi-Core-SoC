@@ -59,6 +59,10 @@ CONTRACT = {
             ("stall", "in", 1),
             ("flush", "in", 1),
             ("pc", "in", 32),
+            ("if_rsp_rdata", "in", 32),
+            ("if_rsp_valid", "in", 1),
+            ("if_req_valid", "out", 1),
+            ("if_req_addr", "out", 32),
             ("instr", "out", 32),
             ("pred_taken", "out", 1),
             ("pred_pc", "out", 32),
@@ -243,8 +247,12 @@ CONTRACT = {
         "ports": [
             ("clk", "in", 1),
             ("rst_n", "in", 1),
+            ("if_rsp_rdata", "in", 32),
+            ("if_rsp_valid", "in", 1),
             ("mem_rsp_rdata", "in", 32),
             ("mem_rsp_valid", "in", 1),
+            ("if_req_valid", "out", 1),
+            ("if_req_addr", "out", 32),
             ("mem_req_valid", "out", 1),
             ("mem_req_addr", "out", 32),
             ("mem_req_wdata", "out", 32),
@@ -496,8 +504,13 @@ class TestStubContracts(unittest.TestCase):
             doc = handle.read()
         row = re.compile(r"^\|\s*`(\w+)`\s*\|\s*(in|out)\s*\|\s*(\d+)\s*\|")
         documented = {}
-        for section in re.split(r"\n## \d+\. `", doc)[1:]:
-            module = section.split("`")[0]
+        for section in re.split(r"\n## ", doc)[1:]:
+            heading = re.match(r"\d+\. `(\w+)`", section)
+            if not heading:
+                # not a per-module section (e.g. "Signal provenance"); its
+                # tables must not be attributed to the module above it
+                continue
+            module = heading.group(1)
             documented[module] = [
                 (m.group(1), m.group(2), int(m.group(3)))
                 for m in (row.match(line) for line in section.split("\n"))
