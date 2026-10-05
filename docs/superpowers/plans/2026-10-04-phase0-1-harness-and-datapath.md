@@ -49,7 +49,7 @@ Modules and files `snake_case`. Signals `snake_case`. Parameters and localparams
 - **Lint is a gate.** `make lint` runs Verilator `--lint-only -Wall` and must report zero warnings.
 - **`make asic-check` is a gate.** Yosys `synth` must succeed from Task 2 onward.
 - Every task ends with a commit: lowercase, imperative, conventional-commit prefix.
-- **Merge discipline:** Phase B branches merge to `phase0-1-harness-datapath` only after that block's own suite is green on its own source alone.
+- **Merge discipline:** Phase B branches merge to `main` only after that block's own suite is green on its own source alone.
 
 ---
 

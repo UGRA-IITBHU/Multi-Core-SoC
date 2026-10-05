@@ -28,7 +28,7 @@ fix it.
 ```bash
 git clone https://github.com/UGRA-IITBHU/Multi-Core-SoC.git
 cd Multi-Core-SoC
-git checkout phase0-1-harness-datapath
+git checkout main
 ```
 
 Then follow `docs/SETUP.md` end to end. When `make lint TOP=alu` and `make test TOP=alu` both
@@ -216,7 +216,7 @@ git push -u origin <your-name>-<block>
 ```
 
 Then tell the integrator. Your branch gets reviewed and merged into
-`phase0-1-harness-datapath`, and then `core.v` wires it all together. **You will not be asked
+`main`, and then `core.v` wires it all together. **You will not be asked
 to write `core.v`.**
 
 ## Suggested build order
