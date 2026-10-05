@@ -23,29 +23,47 @@ Repository: <https://github.com/UGRA-IITBHU/Multi-Core-SoC>
 
 | Requirement | Why |
 |---|---|
-| macOS, Linux or WSL2 | the tooling below is POSIX-shell based |
+| macOS, Linux, or Windows with WSL2 | the tooling below is POSIX-shell based |
+| Native Windows also works | but needs a POSIX shell layer — see §2.2 |
 | Command-line tools | `git`, `make`, `curl`, `python3` |
 | ~3 GB free disk | Verilator, Icarus, Yosys, the sky130 liberty file and a per-checkout Python virtualenv |
 | Python 3.9 or newer | cocotb 2.x |
+
+Set this before your first commit, on every platform:
+
+```sh
+git config core.autocrlf false
+```
+
+Otherwise Windows Git may rewrite the `.v` files' line endings, and every
+diff your teammates see will be noise.
 
 On **Linux** everything below is the same except that Homebrew is not
 available: install Verilator, Icarus Verilog and Yosys from your distribution
 (`apt install verilator iverilog yosys`) or from the OSS CAD Suite, install
 cocotb into the virtualenv exactly as shown, and get the RISC-V cross-compiler
 from the `xpack-dev-tools/riscv-none-elf-gcc` project rather than from
-`brew`. On **Windows**, use WSL2 and follow the Linux instructions; the `sh`
-scripts under `scripts/` and `make` itself are not usable from native
-PowerShell or `cmd.exe`.
+`brew`.
+
+**Windows is supported two ways.** Pick one:
+
+- **WSL2 (Ubuntu)** — full parity with Linux, every command in this document
+  works verbatim, no caveats. **Choose this if you just want to get on with
+  the project.** See §2.1.
+- **Native Windows** — works, and needs a POSIX shell layer on `PATH` because
+  the harness runs `scripts/*.sh`. See §2.2. Do not try this from a bare
+  PowerShell or `cmd.exe` prompt.
 
 ### Alternative: the OSS CAD Suite
 
 The [OSS CAD Suite](https://github.com/YosysHQ/oss-cad-suite-build) bundles
 Yosys, Icarus Verilog, Verilator, iverilog's VPI modules and a matching
-`cocotb` into one download. It is worth considering if you would rather not
-manage six separate installs, but it does **not** cover the RISC-V
-cross-compiler, and its versions will differ from the ones below. This
-document describes the Homebrew-plus-virtualenv route, which is what the
-project is currently verified against.
+`cocotb` into one download, and there are `windows-x64` and `linux-x64`
+builds. It is worth considering if you would rather not manage six separate
+installs, but it does **not** cover the RISC-V cross-compiler, and its
+versions will differ from the ones below. This document describes the
+Homebrew-plus-virtualenv route, which is what the project is currently
+verified against on macOS; on Windows the Suite is the easiest route.
 
 ---
 
@@ -88,6 +106,106 @@ That fetches `third_party/sky130_fd_sc_hd__tt_025C_1v80.lib` (452 cells) into
 `third_party/`, which is gitignored. `make asic-check` and `make area` both
 refuse to run until it is there, and tell you this command. The download is
 idempotent: run it as often as you like.
+
+### 2.1 Windows, route A — WSL2 (recommended)
+
+Full parity with Linux. Nothing below is needed; use the Linux route.
+
+```powershell
+wsl --install -d Ubuntu
+```
+
+Then, **inside** WSL, from `~/Multi-Core-SoC`:
+
+```sh
+sudo apt update && sudo apt install -y verilator iverilog yosys make git
+python3 -m venv .venv && .venv/bin/pip install --upgrade pip && .venv/bin/pip install cocotb
+scripts/fetch-liberty.sh
+```
+
+For the RISC-V cross-compiler, grab the xPack build rather than building it:
+
+```sh
+npm install -g xpm
+xpm install @xpack-dev-tools/riscv-none-elf-gcc@latest --global
+```
+
+Editor: use VS Code with the WSL extension so files are edited on the Linux
+side and line endings behave.
+
+### 2.2 Windows, route B — native
+
+Native Windows works, but the harness runs `scripts/*.sh` and needs a POSIX
+shell, so **a shell layer must be on `PATH`**. Bare PowerShell and `cmd.exe`
+will not work.
+
+**Step 1 — install the OSS CAD Suite.** From
+<https://github.com/YosysHQ/oss-cad-suite-build/releases>, download the
+`windows-x64` archive and extract it.
+
+> **Extract it to a path with no spaces**, e.g. `C:\oss-cad-suite`. A path
+> containing spaces breaks its internal tooling. This is called out in the
+> Suite's own documentation.
+
+You get Yosys, Verilator, Icarus Verilog, cocotb and Surfer in one go. It
+does **not** include a RISC-V cross-compiler, which is only needed from
+Task 9 onward.
+
+**Step 2 — activate it, in every shell you use.** Windows is the one platform
+with no activation wrapper, so run this once per terminal window:
+
+```bat
+C:\oss-cad-suite\environment.bat
+```
+
+Or add that line to your shell profile so it happens automatically.
+
+**Step 3 — the RISC-V cross-compiler.** Needed from Task 9. Either use the
+xPack build:
+
+```bat
+npm install -g xpm
+xpm install @xpack-dev-tools/riscv-none-elf-gcc@latest --global
+```
+
+or download the `win32-x64` archive from
+<https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases> and
+put its `bin` on `PATH`.
+
+**Step 4 — fetch the liberty file.** In the shell with `environment.bat` run:
+
+```bat
+bash scripts/fetch-liberty.sh
+```
+
+`fetch-liberty.sh` is a shell script, so it needs the `bash` that the Suite
+provides. If `bash` is not found, that is the sign your shell layer is not set
+up — go back to Step 2.
+
+**Alternative to the Suite: MSYS2.** If you prefer managing packages
+individually, [MSYS2](https://www.msys2.org/) provides `sh`, `find`, `perl`
+and `make`, which is everything the harness needs:
+
+```bat
+pacman -Syuu
+pacman -S --needed base-devel git make
+pacman -S --needed mingw-w64-x86_64-verilator mingw-w64-x86_64-iverilog mingw-w64-yosys
+```
+
+Run everything from the **MSYS2 MinGW 64-bit** shell. Then follow the
+macOS steps with these two adjustments: activate `/mingw64/bin` and `/usr/bin`
+on `PATH`, and install cocotb into the same per-checkout virtualenv as above.
+
+### Known differences on native Windows
+
+| Area | What to expect |
+|---|---|
+| Shell | Everything must run from a shell with `sh`, `find` and `perl` available — the MSYS2 MinGW shell or the Suite's environment. Not PowerShell or `cmd.exe`. |
+| Verilator version | The Suite and MSYS2 ship a slightly older Verilator than Homebrew (5.050 vs 5.052). Nothing in this project depends on the difference, but do not report a lint difference as a bug without checking it is not just the version. |
+| cocotb + Verilator | There is a known rough edge where cocotb cannot always drive Verilator from a native Windows terminal, because Verilator is a Perl script and needs MSYS2's `perl`. If `make test` misbehaves on Windows but the same test passes on Linux or macOS, that is this issue, not your code. `make test-4state` uses Icarus and is more reliable there. **If you hit it, use route A (WSL2).** |
+| Line endings | Check out with `core.autocrlf=false` so `.v` files are not rewritten — see §1. |
+| Paths | The Makefile resolves sources with `$(wildcard)`, not `$(shell find)`, precisely so it behaves identically on every platform. Do not "simplify" it back. |
+
 
 ---
 
@@ -286,7 +404,28 @@ implement the body. It is the same condition Verilator's `UNDRIVEN`
 suppression hides, so Yosys is telling you something lint will not. Do **not**
 suppress it: it is the honest signal that a body is missing.
 
-### "make: *** [test-contracts] Error 127 ... No such file or directory"
+### "bash: scripts/fetch-liberty.sh: No such file or directory" (Windows)
+
+You are not in a shell that can see the repository. Open the MSYS2 MinGW
+64-bit shell, or a terminal where you have run `environment.bat`, then `cd`
+into the repository root and retry.
+
+### `make: ./scripts/yosys-prep.sh: ... Permission denied` or `not found` (Windows)
+
+The same cause: no POSIX shell layer on `PATH`. Native Windows needs either
+the OSS CAD Suite environment activated, or the MSYS2 shell. See §2.2.
+
+### Every diff shows the whole file as changed (Windows)
+
+Line endings. Fix it once:
+
+```sh
+git config core.autocrlf false
+git rm --cached -r .
+git reset --hard
+```
+
+### `make: *** [test-contracts] Error 127 ... No such file or directory"`
 
 Your virtualenv is missing or incomplete. Recreate it with the two commands in
 section 2. Check `.venv/bin/python` exists and that

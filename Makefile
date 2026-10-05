@@ -59,7 +59,11 @@ ifeq ($(TOP),core)
 SRCS := rtl/core/core.v \
         $(addprefix rtl/core/,$(addsuffix .v,$(CORE_CHILDREN)))
 else
-SRCS := $(shell find rtl -name '$(TOP).v')
+# $(wildcard), NOT $(shell find ...).  $(wildcard) is evaluated by make itself with
+# no shell, so this behaves identically on macOS, Linux and Windows.  $(shell find)
+# breaks on Windows, where find.exe is a text-search tool, not Unix find.
+# One module per file and file name == module name, so wildcard is exact.
+SRCS := $(wildcard rtl/core/$(TOP).v rtl/common/$(TOP).v)
 endif
 
 # Backstop for "a glob matched no files, so the gate passed on nothing".
