@@ -34,6 +34,20 @@ git checkout main
 Then follow `docs/SETUP.md` end to end. When `make lint TOP=alu` and `make test TOP=alu` both
 work, you are ready.
 
+### Before you code: read `docs/REFERENCES.md`
+
+It has the **RISC-V ISA specification** links (including the exact chapters for your block),
+**annotated datapath diagrams** with control signals, and — importantly — a table of **how our
+design deliberately differs from those diagrams**, so you do not copy the wrong thing.
+
+The short version of the differences that will bite you:
+
+- Branches resolve in **EX**, not MEM.
+- **Every** redirect goes through one funnel in `pc_gen`. There is no second path.
+- `core` owns all four pipeline bundles and every `valid` bit; your module produces values only.
+- The load-use interlock is **exactly one** stall cycle.
+- Writeback has **three** sources, not two — `wb_sel` includes PC+4 for `JAL`/`JALR`.
+
 **Your first real check** — confirm the stubs still assert "not implemented":
 
 ```bash

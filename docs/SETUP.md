@@ -1,7 +1,9 @@
 # Setting up and working on this repository
 
 > **New here?** Read this page end to end, then read
-> [`docs/TEAM.md`](./TEAM.md) — it tells you exactly which modules you own and what to build.
+> [`docs/TEAM.md`](./TEAM.md) — it tells you exactly which modules you own and what to
+> build, and [`docs/REFERENCES.md`](./REFERENCES.md) has the RISC-V ISA specification and
+> annotated datapath diagrams to read alongside it.
 
 ## What this project is
 
