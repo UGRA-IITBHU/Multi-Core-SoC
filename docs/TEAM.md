@@ -58,7 +58,8 @@ You should see a failure saying `not implemented: regfile.<signal>`. That is cor
 is to make it pass.
 
 ---
-
+## The diagram of implementation
+![](https://notes.cs61c.org/build/five-stage-pipeline-690dc2e5439eb5f4dde99d25cba144bc.png)
 ## Who owns what
 
 | Person | Block | Files you implement | Test file you write |
