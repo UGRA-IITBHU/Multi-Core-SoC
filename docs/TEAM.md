@@ -176,6 +176,13 @@ The `id_stall` duration is the single most bug-prone thing in this block. Write 
 asserts the stall **count equals 1**, not merely that the value is eventually correct — an
 off-by-one passes every value check and corrupts only dependent back-to-back code.
 
+You also own the harness (Task 2), and one harness bug is open against it: **`make test` cannot
+pass on a machine whose Verilator is 4.x**, including most Linux installs from `apt`, because
+cocotb 2.x needs Verilator 5. It fails for every module in a `g++` error inside cocotb's own
+shim, which reads like a broken DUT. See the "Open item against T2" block in the plan and
+docs/SETUP.md §2. Until it is fixed at the Makefile level, everyone has to install 5.x into
+`.venv` and put it ahead on `PATH` by hand.
+
 ---
 
 ## Commands you run

@@ -151,6 +151,14 @@ endmodule
 - [ ] **Step 8: Verify standalone linting still works** — rerun the Task 1 Step 6 loop → all 13 modules lint clean in isolation.
 - [ ] **Step 9: Commit** — `git commit -m "build: add verilator, cocotb and yosys harness with standalone-module targets"`
 
+**Open item against T2, raised by P1 — `make test` cannot pass on this machine.** Not a phase 1 blocker for RTL correctness, but every `make test` gate in this plan, including the Phase 1 exit criteria, is currently unreachable, so it is recorded here rather than in a block owner's task.
+
+- **Symptom.** `make test` dies in `g++` while compiling cocotb's own VPI shim, before any RTL is reached: `error: 'clearEvalNeeded' is not a member of 'VerilatedVpi'`, `error: 'class Vtop' has no member named 'eventsPending'`. It happens for **every** `$(TOP)`, including ones that lint and synthesise cleanly, which is what makes it misleading — it looks like a broken module.
+- **Cause.** cocotb 2.x's `verilator.cpp` calls `VerilatedVpi` entry points that exist only in Verilator 5. The system Verilator here is 4.038, which `apt install verilator` supplies on most Linux distributions — including the route docs/SETUP.md documented, so the doc walked people straight into it. Icarus is unaffected, which is why `make test-4state` works and hid this from anyone using only the 4-state target.
+- **Workaround, verified.** `.venv/bin/pip install verilator` (5.48) and `export PATH="$PWD/.venv/bin:$PATH"`. Under that, P1's `pc_gen` and `if_stage` suites pass on Verilator — 11/11 and 12/12 — and `-Wall` stays silent. docs/SETUP.md §2 now documents this in full, including the `verilator-cli` console-script trap.
+- **Why it is still open.** The workaround lives in the gitignored `.venv`, so it is machine-local and unversioned: a fresh clone, a new teammate, or CI still fails. Two candidate repo-level fixes, both in the T2 harness rather than in any owner's block: resolve the Verilator binary the way `$(PYTHON)` already resolves the interpreter, and/or add a version guard to `make test` that fails immediately with "Verilator 5.x required, found 4.038" instead of a compiler wall. A guard alone is arguably the more important half: the current failure mode tells you nothing about which tool is wrong.
+- **Not done deliberately.** P1 did not touch the Makefile. T2 is the harness task and the change would land in shared infrastructure that five owners build against.
+
 ---
 
 ## Phase B — Parallel (5 owners, no inter-owner blocking)
@@ -186,13 +194,19 @@ endmodule
 
 **Two memory ports, not one** (spec §6.3). Instruction fetch and load/store each own a port over one unified address space. Phase 4 adds separate L1 I$ and D$ that need independent bandwidth, so splitting now avoids redesigning fetch later — and avoids IF stalling whenever the LSU is active.
 
-- [ ] **Step 1: Failing tests** — pc_gen: `test_resets_to_reset_vector`, `test_increments_by_four`, `test_redirect_overrides_next_pc`, `test_stall_freezes_pc`, `test_predicted_take_uses_pred_pc`. if_stage: `test_latches_pc_and_instr`, `test_holds_when_stalled`, `test_clears_valid_on_flush`, `test_valid_low_after_reset`, `test_issues_fetch_request_for_pc`, `test_latches_fetch_response_into_if_id`, `test_holds_fetch_valid_until_response`.
-- [ ] **Step 2: Verify they fail** — both FAIL, not-implemented assertions fire.
-- [ ] **Step 3: Implement `pc_gen`** — priority arbiter: `redirect_valid` > `pred_taken` > `pc + 4`. `next_pc` combinational; `pc` registers only when not stalled. Wire `pred_taken`/`pred_pc` as inputs tied to constants until phase 5 (§4.1 decision 8). **This module is the single point where every redirect in the core converges** (§4.1 decision 5) — comment it as the funnel so phase 3 adds its trap arm here without redesign.
-- [ ] **Step 4: Implement `if_stage`** — drive `if_req_valid` with `if_req_addr` from the current `pc`, hold them until `if_rsp_valid`, then latch `if_rsp_rdata` into `if_id__instr` alongside `if_id__pc` using the offsets from `pipeline_regs.vh`. Assert `flush` forces `if_id__valid` low regardless of `if_rsp_rdata`.
-- [ ] **Step 5: Verify both pass standalone** — `make test MODULE=test_pc_gen TOP=pc_gen && make test MODULE=test_if_stage TOP=if_stage` → all PASS.
-- [ ] **Step 6: Lint and synthesise both standalone** — clean.
+- [x] **Step 1: Failing tests** — pc_gen: `test_resets_to_reset_vector`, `test_increments_by_four`, `test_redirect_overrides_next_pc`, `test_stall_freezes_pc`, `test_predicted_take_uses_pred_pc`. if_stage: `test_latches_pc_and_instr`, `test_holds_when_stalled`, `test_clears_valid_on_flush`, `test_valid_low_after_reset`, `test_issues_fetch_request_for_pc`, `test_latches_fetch_response_into_if_id`, `test_holds_fetch_valid_until_response`.
+- [x] **Step 2: Verify they fail** — both FAIL, not-implemented assertions fire.
+- [x] **Step 3: Implement `pc_gen`** — priority arbiter: `redirect_valid` > `pred_taken` > `pc + 4`. `next_pc` combinational; `pc` registers only when not stalled. Wire `pred_taken`/`pred_pc` as inputs tied to constants until phase 5 (§4.1 decision 8). **This module is the single point where every redirect in the core converges** (§4.1 decision 5) — comment it as the funnel so phase 3 adds its trap arm here without redesign.
+- [x] **Step 4: Implement `if_stage`** — drive `if_req_valid` with `if_req_addr` from the current `pc`, hold them until `if_rsp_valid`, then latch `if_rsp_rdata` into `if_id__instr` alongside `if_id__pc` using the offsets from `pipeline_regs.vh`. Assert `flush` forces `if_id__valid` low regardless of `if_rsp_rdata`.
+- [x] **Step 5: Verify both pass standalone** — `make test MODULE=test_pc_gen TOP=pc_gen && make test MODULE=test_if_stage TOP=if_stage` → all PASS. **Run under `make test-4state`, not `make test`: the installed Verilator is 4.038 and cocotb 2.1.0 requires 5.x, so `make test` fails to compile for every module, not only this block's. See docs/SETUP.md.**
+- [x] **Step 6: Lint and synthesise both standalone** — clean. `make lint TOP=pc_gen` / `TOP=if_stage` zero warnings; `make asic-check` maps both (pc_gen 2282 µm², if_stage 2755 µm² against sky130).
 - [ ] **Step 7: Commit** — `git commit -m "feat(if): add pc generator, redirect arbiter and fetch stage"`
+
+**Open items P1 has raised against P5, unreported as of this writing.** Neither is P1's to decide alone; each is a reading of the frozen contract, and both are documented in the module headers.
+
+1. **Redirect outranks `stall` in `pc_gen`.** docs/TEAM.md §P1 says "`pc` only advances when `stall` is low"; that holds for the sequential and predicted steps, but the implementation applies `redirect_valid` even while `stall` is high, because EX raises a redirect on exactly the cycles the load-use interlock can stall the front end. Either reading is defensible — the integration owner picks, and if `stall` is simply never asserted together with a redirect the code is correct under both.
+2. **`if_stage` has no instruction-valid output, so `if_id__valid` must be derived in `core`.** docs/TEAM.md §P1 assumes the stage clears its own valid state. The handshake alone does not express the one case where no instruction follows — a `flush` that arrives with a request still outstanding — so `core` needs a bit of its own state (`flush_discard`). The clean fix is a contract change adding an instruction-valid output to `if_stage`, which needs P5's sign-off under the Task 1 contract-change rule because four owners build against the port list.
+3. **`p_PC_STEP` is a localparam duplicated in `pc_gen.v` and `if_stage.v`.** It belongs in `defs.vh`; that file is frozen, so it is reported rather than edited.
 
 ---
 
