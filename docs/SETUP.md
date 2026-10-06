@@ -28,6 +28,7 @@ Repository: <https://github.com/UGRA-IITBHU/Multi-Core-SoC>
 | macOS, Linux, or Windows with WSL2 | the tooling below is POSIX-shell based |
 | Native Windows also works | but needs a POSIX shell layer — see §2.2 |
 | Command-line tools | `git`, `make`, `curl`, `python3` |
+| **Verilator 5.x** | cocotb 2.x cannot drive Verilator 4.x — `make test` fails for every module on 4.x. See §2 |
 | ~3 GB free disk | Verilator, Icarus, Yosys, the sky130 liberty file and a per-checkout Python virtualenv |
 | Python 3.9 or newer | cocotb 2.x |
 
@@ -45,7 +46,8 @@ available: install Verilator, Icarus Verilog and Yosys from your distribution
 (`apt install verilator iverilog yosys`) or from the OSS CAD Suite, install
 cocotb into the virtualenv exactly as shown, and get the RISC-V cross-compiler
 from the `xpack-dev-tools/riscv-none-elf-gcc` project rather than from
-`brew`.
+`brew`. One caveat the macOS route does not have: your distribution's
+Verilator is very likely 4.x, which will not run the tests — see §2.
 
 **Windows is supported two ways.** Pick one:
 
@@ -95,6 +97,51 @@ The Makefile finds `.venv/bin/python` automatically and falls back to whatever
 configuring. `.venv/` is gitignored: never commit it, and never install
 cocotb into your system Python "just this once".
 
+### Verilator must be 5.x — check yours
+
+```sh
+verilator --version
+```
+
+**Anything below 5.0 will fail, and it fails in a way that looks like a bug in
+the module under test.** cocotb 2.x compiles a Verilator VPI shim
+(`cocotb/share/lib/verilator/verilator.cpp`) that calls `VerilatedVpi` entry
+points which only exist in Verilator 5. So on Verilator 4.x every `make test`
+dies in `g++` with errors like `error: 'clearEvalNeeded' is not a member of
+'VerilatedVpi'` and `error: 'class Vtop' has no member named 'eventsPending'` —
+for **every** module, including ones that lint and synthesise cleanly. Nothing
+in the RTL is implicated; do not debug your Verilog in response to it.
+
+This bites hardest on Linux and WSL2, where `apt install verilator` gives 4.x
+on most distributions. If your version is 4.x, install 5.x from PyPI into the
+same per-checkout virtualenv — no root, no system change, and it disappears
+with the virtualenv:
+
+```sh
+.venv/bin/pip install verilator
+```
+
+Then put the virtualenv ahead of the system Verilator, because the Makefile
+calls `verilator` from `PATH`:
+
+```sh
+export PATH="$PWD/.venv/bin:$PATH"
+verilator --version   # must report 5.x
+```
+
+Two things to check after that install. The console script is named
+`verilator-cli`, and it finds the real binary via `PATH` — which is how it
+picks up the system 4.x when the virtualenv is not first. Confirm which
+binary you are actually running before trusting a green result:
+
+```sh
+PATH="$PWD/.venv/bin:$PATH" verilator --version
+```
+
+`make lint` and `make test` must both be run with that same `PATH` prefix, or
+they will silently use two different Verilators. Icarus (`make test-4state`)
+does not have this constraint and is the right cross-check either way.
+
 ### sky130 liberty files
 
 The synthesis targets need a standard-cell liberty file and there is no area
@@ -124,6 +171,17 @@ sudo apt update && sudo apt install -y verilator iverilog yosys make git
 python3 -m venv .venv && .venv/bin/pip install --upgrade pip && .venv/bin/pip install cocotb
 scripts/fetch-liberty.sh
 ```
+
+`apt install verilator` gives Verilator **4.x** on Ubuntu, and cocotb 2.x
+cannot drive it — `make test` will fail for every module. Add the two lines
+below and export the `PATH` before running any `make test`:
+
+```sh
+.venv/bin/pip install verilator
+export PATH="$PWD/.venv/bin:$PATH"
+```
+
+See "Verilator must be 5.x" in §2 for how to confirm you got it.
 
 For the RISC-V cross-compiler, grab the xPack build rather than building it:
 
@@ -217,7 +275,7 @@ Run these five commands from the repository root. Each one should succeed and
 print what is described.
 
 ```sh
-verilator --version        # Verilator 5.052
+verilator --version        # Verilator 5.052 — must be 5.x, see §2
 iverilog -V | head -1      # Icarus Verilog version 12.0 (stable)
 yosys -V                   # Yosys 0.69+post
 riscv64-elf-gcc --version  # riscv64-elf-gcc (GCC) 16.2.0
@@ -226,7 +284,9 @@ riscv64-elf-gcc --version  # riscv64-elf-gcc (GCC) 16.2.0
 
 Those are the versions this project was developed and verified against. Other
 versions will very likely work; if you see a failure that this document does
-not explain, check your versions first and say so in your report.
+not explain, check your versions first and say so in your report. Verilator is
+the exception: **5.x is a hard requirement**, not a preference — see
+"Verilator must be 5.x" in §2.
 
 Then check the harness itself. All of these must pass:
 
@@ -240,6 +300,10 @@ make test-4state MODULE=test_reset_sync TOP=reset_sync # TESTS=2 PASS=2 FAIL=0
 make test-contracts                                    # Ran 11 tests ... OK
 make area                                              # module -> um^2 table
 ```
+
+If `make lint` passes but `make test` dies inside `g++` compiling
+`verilator.cpp`, that is the Verilator 4.x signature, not an RTL problem: go
+back to §2 and install 5.x into `.venv`.
 
 **What success looks like.** `make lint` prints the Verilator banner and
 nothing else — it must be completely silent, because `-Wall` is a hard gate.
@@ -445,6 +509,15 @@ It cannot: `tb/run_test.py` reads the simulator's results file and exits
 non-zero if any test failed. If you ever see a green `make test` over a red
 summary, that is a bug in the harness, not in your test — report it rather
 than working around it. A gate that cannot fail is worse than no gate.
+
+### `error: 'clearEvalNeeded' is not a member of 'VerilatedVpi'` (or `'class Vtop' has no member named 'eventsPending'`)
+
+Your Verilator is 4.x and cocotb 2.x needs 5.x. The error appears while
+`g++` compiles cocotb's own VPI shim, before any of your RTL is reached, and
+it appears for every module — so it is never evidence of a bug in the module
+you were testing. Fix it with `.venv/bin/pip install verilator` and run `make`
+with `$PWD/.venv/bin` ahead of the system Verilator on `PATH`. Full
+explanation in §2, "Verilator must be 5.x".
 
 ### "not implemented: &lt;module&gt;.&lt;signal&gt;"
 

@@ -32,16 +32,36 @@
 // fetch handshake belongs to `if_stage` and the load/store handshake to `lsu`,
 // so a fetch stall can only reach this module through `stall`.
 //
-// Drop-in replaceable: this file currently holds only the frozen port list.
-// Replacing it with a real implementation must not change the port list and
-// must not require any other module to change.
+// Note - the one redirect funnel.  Every redirect in the core arrives here:
+// the branch arm of `ex_stage.ex_redirect_valid` today, and the trap and
+// interrupt arms from phase 3.  There is no second path into the PC and there
+// must never be one; a phase that needs a new redirect source adds an arm to
+// the arbiter below.
+//
+// Note - a redirect outranks `stall`.  `redirect_valid` is raised by EX on
+// precisely the cycles the front end may be stalled by the load-use interlock,
+// and a redirect swallowed by a stall would leave the core fetching the wrong
+// path for the whole stall window with nothing downstream reporting an error.
+// So the priority is `rst_n` > `redirect_valid` > `!stall`.  This is reported
+// to the integrator because it is the one place the frozen wording admits two
+// readings: "`pc` only advances when `stall` is low" holds for the sequential
+// and predicted steps, and the redirect is applied even when `stall` is high.
+// Wiring `stall` so that it is never asserted together with a redirect -- for
+// example `stall = if_req_valid && !redirect_valid` -- also keeps this correct
+// if that reading is preferred instead.
+//
+// Note - `pred_taken` / `pred_pc` are inputs tied to constants by `core` in
+// phase 1 (spec decision 8).  No predictor lives here; `if_stage` publishes
+// the not-taken fall-through, and phase 5 replaces that with a real predictor
+// without touching this port list.
+//
+// Drop-in replaceable: the port list above is frozen and unchanged; this file
+// implements exactly those ports from its own source alone.
 // ============================================================================
 `timescale 1ns/1ps
 
 `include "defs.vh"
 
-/* verilator lint_off UNDRIVEN */
-/* verilator lint_off UNUSEDSIGNAL */
 module pc_gen (
   input  wire                clk,
   input  wire                rst_n,
@@ -53,14 +73,43 @@ module pc_gen (
   output wire [`p_PC_W-1:0]  pc,
   output wire [`p_PC_W-1:0]  next_pc
 );
-/* verilator lint_on UNUSEDSIGNAL */
-/* verilator lint_on UNDRIVEN */
 
-  // Phase-1 stub.  The body is deliberately empty: every output reports itself
-  // as not implemented until the fetch block is built.
+  // One instruction is 4 bytes.  This constant belongs in `defs.vh` with the
+  // other global datapath constants; `defs.vh` is a frozen contract header, so
+  // the addition is reported to the controller rather than made here.
+  localparam [`p_PC_W-1:0] p_PC_STEP = `p_PC_W'd4;
+
+  reg [`p_PC_W-1:0] pc_q;
+
+  assign pc = pc_q;
+
+  // The single redirect funnel.  Priority: `redirect_valid` > `pred_taken` >
+  // `pc + 4`.  `next_pc` is the decision itself, not a delayed copy of it, so
+  // the PC and `next_pc` can never disagree about which source won.
+  assign next_pc = redirect_valid ? redirect_pc :
+                   pred_taken    ? pred_pc    :
+                                   (pc_q + p_PC_STEP);
+
   always @(posedge clk) begin
-    assert (1'b0) else $error("not implemented: pc_gen.pc");
-    assert (1'b0) else $error("not implemented: pc_gen.next_pc");
+    if (!rst_n)
+      pc_q <= `p_RESET_VEC;
+    else if (redirect_valid)
+      // Outranks `stall`, for the reason given in the header.
+      pc_q <= redirect_pc;
+    else if (!stall)
+      // `next_pc` with no redirect and no prediction is the sequential step.
+      pc_q <= next_pc;
+  end
+
+  // The arbiter is the contract's guarantee, so it is asserted rather than
+  // assumed.  Each arm is checked with the other two high as well, which is
+  // the only stimulus that orders them.
+  always @(posedge clk) begin
+    if (rst_n) begin
+      assert (!redirect_valid || next_pc == redirect_pc) else $error("pc_gen: a redirect must win the next_pc arbiter");
+      assert (redirect_valid || !pred_taken || next_pc == pred_pc) else $error("pc_gen: a prediction must outrank the sequential step");
+      assert (redirect_valid || pred_taken || next_pc == pc + p_PC_STEP) else $error("pc_gen: next_pc must fall through to pc + 4");
+    end
   end
 
 endmodule
