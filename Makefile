@@ -39,7 +39,13 @@ MODULE ?= test_$(TOP)
 # --- tools -----------------------------------------------------------------
 # cocotb lives in ./.venv (see docs/SETUP.md).  Fall back to whatever python3
 # is on PATH so the Makefile still works on a machine set up by hand.
-PYTHON ?= $(firstword $(wildcard .venv/bin/python) python3)
+# BOTH spellings are listed because $(wildcard) matches exact names only, and a
+# Windows venv contains .venv/bin/python.exe rather than .venv/bin/python.
+# Without the .exe entry this silently falls through to a bare `python3`, which
+# on a machine with the OSS CAD Suite on PATH is that suite's interpreter --
+# which has no cocotb in it, so `make test` dies on ModuleNotFoundError instead
+# of saying which interpreter it tried.
+PYTHON ?= $(firstword $(wildcard .venv/bin/python .venv/bin/python.exe) python3)
 
 # --- shared headers --------------------------------------------------------
 # Supplied on the include path so every module says `include "defs.vh" with no
