@@ -12,10 +12,23 @@ three things:
     lints with zero warnings *from its own source file alone*, with only
     ``defs.vh`` / ``ctrl_fields.vh`` / ``pipeline_regs.vh`` on the include
     path.  If a stub reached out to another module, elaboration would fail.
-3.  **Not-implemented assertion is armed.**  Every output of every stub carries
-    an immediate assertion that reports ``not implemented: <module>.<output>``.
-    A generated wrapper ties every input to a non-zero, width-specific pattern,
-    clocks the design, and the test requires one such message per output.
+3.  **Not-implemented assertion is armed.**  Every output of every *still-stubbed*
+    module carries an immediate assertion that reports ``not implemented:
+    <module>.<output>``.  A generated wrapper ties every input to a non-zero,
+    width-specific pattern, clocks the design, and the test requires one such
+    message per output.
+
+    This check applies only to the modules that are still stubs.  Once a module
+    is implemented its ``not implemented:`` assertions are correctly gone, and
+    requiring them would turn the gate permanently red without protecting
+    anything.  ``STILL_STUBBED`` below names those modules, and
+    ``test_stub_classification_matches_the_rtl`` cross-checks the list against
+    the RTL so that implementing a module without reclassifying it (or
+    reclassifying one that is still a stub) is caught immediately.
+
+    Checks 1 and 2 are NOT narrowed: the frozen port lists, the drop-in rule and
+    the contract-doc agreement are checked for all thirteen modules, implemented
+    or not, because those invariants apply for the whole of phase 1.
 
 Run directly (``python3 tb/test_stubs.py``) or via
 ``python3 -m unittest discover tb``.
@@ -272,6 +285,31 @@ CONTRACT = {
     },
 }
 
+# The thirteen core modules that still hold only their frozen port list and
+# report every output as not implemented.  This is the ONLY module set that
+# check 3 applies to; see the module docstring for why.
+#
+# When a module is implemented, remove it from this set and its ``not
+# implemented:`` assertions go with it.  ``test_stub_classification_matches_the_rtl``
+# fails if the two are allowed to disagree, so this list cannot rot silently.
+#
+# Still stubbed:
+#   alu         core        ex_stage
+#   lsu         mem_stage   wb_stage
+STILL_STUBBED = {
+    "alu",
+    "core",
+    "ex_stage",
+    "lsu",
+    "mem_stage",
+    "wb_stage",
+}
+
+# Everything else in CONTRACT is implemented and is covered by a real cocotb
+# regression instead.  Derived rather than listed, so adding a module to
+# CONTRACT cannot leave it in both sets or in neither.
+IMPLEMENTED = set(CONTRACT) - STILL_STUBBED
+
 
 def _strip_comments(text):
     text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
@@ -466,13 +504,54 @@ class TestStubContracts(unittest.TestCase):
                     % (module, proc.stdout, proc.stderr),
                 )
 
+    def test_stub_classification_matches_the_rtl(self):
+        """Keep STILL_STUBBED honest in both directions.
+
+        Without this, the not-implemented check can be silenced the wrong way:
+        dropping a module from STILL_STUBBED without implementing it would make
+        the gate pass while the module still reports every output as
+        unimplemented, which is exactly the silent-pass failure this file
+        exists to prevent.
+        """
+        self.assertEqual(
+            STILL_STUBBED | IMPLEMENTED,
+            set(CONTRACT),
+            "STILL_STUBBED and IMPLEMENTED do not partition CONTRACT",
+        )
+        self.assertEqual(
+            STILL_STUBBED & IMPLEMENTED,
+            set(),
+            "a module is classified as both stubbed and implemented",
+        )
+        for module in sorted(CONTRACT):
+            with self.subTest(module=module):
+                path = os.path.join(RTL_CORE, module + ".v")
+                with open(path) as handle:
+                    text = handle.read()
+                armed = "not implemented:" in text
+                if module in STILL_STUBBED:
+                    self.assertTrue(
+                        armed,
+                        "%s.v is classified as still stubbed but carries no "
+                        "not-implemented assertion; either implement it or "
+                        "leave it in STILL_STUBBED" % module,
+                    )
+                else:
+                    self.assertFalse(
+                        armed,
+                        "%s.v is implemented but still reports outputs as not "
+                        "implemented; finish it or move it back to "
+                        "STILL_STUBBED" % module,
+                    )
+
     def test_not_implemented_assertion_fires_for_every_output(self):
         iverilog = shutil.which("iverilog")
         vvp = shutil.which("vvp")
         if iverilog is None or vvp is None:
             self.skipTest("iverilog/vvp not installed")
-        for module, spec in sorted(CONTRACT.items()):
+        for module in sorted(STILL_STUBBED):
             with self.subTest(module=module):
+                spec = CONTRACT[module]
                 with tempfile.TemporaryDirectory() as tmp:
                     wrapper = os.path.join(tmp, "tb_stub_wrapper.v")
                     binary = os.path.join(tmp, "sim.out")
