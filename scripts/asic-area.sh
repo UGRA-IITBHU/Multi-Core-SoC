@@ -57,20 +57,26 @@ for path in $(find "$RTL_DIR" -name '*.v' | sort); do
                   abc -liberty $LIBERTY; \
                   stat -liberty $LIBERTY" 2>&1) || {
     echo "asic-area.sh: $module failed to synthesise" >&2
-    echo "$log" | grep -iE 'error|hierarch' >&2 || true
+    printf '%s\n' "$log" | grep -iE 'error|hierarch' >&2 || true
     failed=$((failed + 1))
     continue
   }
 
+  # printf, never echo. Yosys writes a top-level name as `\core` when the design
+  # has a flattened hierarchy, and `echo` in /bin/sh (bash in POSIX mode) treats
+  # `\c` as "stop output". Every character from that point on was therefore
+  # discarded, the line was cut in half, and `core` - the one module whose area
+  # the phase gate actually depends on - reported zero while every other module
+  # looked fine. `printf '%s'` has no escapes to interpret.
   # `stat -liberty` prints, among other lines:
   #     "  2   50.048 cells"
   #     "Chip area for module `\top': 50.048000"
   #     "  of which used for sequential elements: 50.048000 (100.00%)"
   # Take the LAST match of each: synth runs `stat` more than once, and only
   # the final, liberty-mapped one carries the mapped numbers.
-  area=$(echo "$log" | sed -n "s/.*Chip area for module .*: *\([0-9.]*\).*/\1/p" | tail -1)
-  cells=$(echo "$log" | sed -n 's/^ *\([0-9][0-9]*\) *[0-9.]* *cells *$/\1/p' | tail -1)
-  seq=$(echo "$log" | sed -n 's/.*sequential elements: *\([0-9.]*\).*/\1/p' | tail -1)
+  area=$(printf '%s\n' "$log" | sed -n "s/.*Chip area for module .*: *\([0-9.]*\).*/\1/p" | tail -1)
+  cells=$(printf '%s\n' "$log" | sed -n 's/^ *\([0-9][0-9]*\) *[0-9.]* *cells *$/\1/p' | tail -1)
+  seq=$(printf '%s\n' "$log" | sed -n 's/.*sequential elements: *\([0-9.]*\).*/\1/p' | tail -1)
   [ -n "$area" ] || area=0
   [ -n "$cells" ] || cells=0
   [ -n "$seq" ] || seq=0
