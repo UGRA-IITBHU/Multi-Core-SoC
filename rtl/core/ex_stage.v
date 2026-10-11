@@ -223,7 +223,8 @@ module ex_stage (
   // --------------------------------------------------------------------------
   wire signed [`p_XLEN-1:0] op_a_s = op_a_r;
   wire signed [`p_XLEN-1:0] op_b_s = op_b_r;
-  wire [`p_XLEN-1:0] shamt = op_b_r[SHIFT_AMT_W-1:0];
+  wire [`p_XLEN-1:0] shamt =
+      {{(`p_XLEN-SHIFT_AMT_W){1'b0}}, op_b_r[SHIFT_AMT_W-1:0]};
 
   reg [`p_XLEN-1:0] alu_result_r;
   wire [`p_XLEN-1:0] slt_result  = (op_a_s < op_b_s) ? CONST_ONE : {`p_XLEN{1'b0}};
@@ -293,7 +294,11 @@ module ex_stage (
   wire [`p_PC_W-1:0] pc_next_r     = id_pc + CONST_PC4;
   wire [`p_PC_W-1:0] pc_plus_imm_r = id_pc + id_imm;
   wire [`p_PC_W-1:0] jalr_sum_r    = rs1_val + id_imm;
-  wire [`p_PC_W-1:0] jalr_target_r = {jalr_sum_r[`p_PC_W-1:1], 1'b0};
+  // JALR clears bit 0 of the target.  Expressed as a mask rather than a
+  // `{jalr_sum_r[31:1], 1'b0}` concatenation so that every bit of
+  // jalr_sum_r is consumed — a concatenation leaves bit 0 dangling and
+  // trips UNUSEDSIGNAL.
+  wire [`p_PC_W-1:0] jalr_target_r = jalr_sum_r & ~CONST_ONE;
 
   reg redirect_valid_r;
   always @(*) begin

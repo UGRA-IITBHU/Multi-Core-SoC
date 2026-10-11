@@ -79,7 +79,11 @@ def main():
         # pass would be a green gate that proved nothing.
         always=True,
     )
-    results_file = runner.test(hdl_toplevel=top, test_module=module)
+    # WAVES=1 dumps a VCD. Reading the real edge-by-edge ordering beats
+    # inferring it from sampled values, which is how the store/response race
+    # below got misdiagnosed twice.
+    waves = os.environ.get("WAVES") == "1"
+    results_file = runner.test(hdl_toplevel=top, test_module=module, waves=waves)
 
     # cocotb's runner only fails the process when it is running under pytest.
     # Driven from a Makefile it is not, so a FAILing test would otherwise exit

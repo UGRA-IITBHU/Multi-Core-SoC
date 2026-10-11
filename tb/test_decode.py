@@ -375,13 +375,19 @@ RV32I = [
                         mem_unsigned=1, uses_rs1=1, uses_rd=1, reg_write=1,
                         wb_sel=WB_MEM)),
 
-    # Stores: address is rs1 + imm but the stored *value* is rs2, so op2_sel is
-    # RS2 and the immediate comes from `imm_sel` alone.  No writeback at all.
-    ("SB", SB, bundle(imm_sel=IMM_S, mem_write=1, mem_size=MEM_BYTE,
+    # Stores: the effective address is rs1 + imm, so op2_sel is the immediate
+    # exactly as for a load. The stored *value* is rs2, but `ex_stage` takes it
+    # off ex_rs2_data, so it never reaches the ALU. `op2_sel` used to go
+    # unasserted here, which is how it stayed wrong for so long -- it is now
+    # pinned. No writeback at all.
+    ("SB", SB, bundle(imm_sel=IMM_S, op1_sel=OP1_RS1, op2_sel=OP2_IMM,
+                      alu_op=ALU_ADD, mem_write=1, mem_size=MEM_BYTE,
                       uses_rs1=1, uses_rs2=1)),
-    ("SH", SH, bundle(imm_sel=IMM_S, mem_write=1, mem_size=MEM_HALF,
+    ("SH", SH, bundle(imm_sel=IMM_S, op1_sel=OP1_RS1, op2_sel=OP2_IMM,
+                      alu_op=ALU_ADD, mem_write=1, mem_size=MEM_HALF,
                       uses_rs1=1, uses_rs2=1)),
-    ("SW", SW, bundle(imm_sel=IMM_S, mem_write=1, mem_size=MEM_WORD,
+    ("SW", SW, bundle(imm_sel=IMM_S, op1_sel=OP1_RS1, op2_sel=OP2_IMM,
+                      alu_op=ALU_ADD, mem_write=1, mem_size=MEM_WORD,
                       uses_rs1=1, uses_rs2=1)),
 
     # OP-IMM: rs1 op imm12.  Every one of them, so the funct3-to-alu_op mapping
@@ -1068,16 +1074,20 @@ async def test_branches_and_stores_do_not_set_uses_rd(dut):
 async def test_operand_selects_per_instruction_class(dut):
     """op1_sel and op2_sel for each class of instruction.
 
-    The four shapes are: rs1+rs2 (OP, branches, stores), rs1+imm (OP-IMM, loads,
-    JALR), pc+pc (AUIPC), pc+imm (JAL), and zero+imm (LUI).  A store is the one
-    that mixes the shapes - its *address* is rs1+imm but its *data* is rs2, and
-    since one `op2_sel` serves both purposes the immediate comes from `imm_sel`
-    and the stored value from rs2.  Getting that backwards stores the address.
+    The shapes are: rs1+rs2 (OP, branches), rs1+imm (OP-IMM, loads, JALR,
+    and *stores*), pc+pc (AUIPC), pc+imm (JAL), and zero+imm (LUI).
+
+    A store looks like it mixes two shapes - its address is rs1+imm, its data is
+    rs2 - but it does not, because the data never goes through the ALU:
+    `ex_stage` takes it off `ex_rs2_data` directly. So a store is plain rs1+imm.
+    Selecting rs2 here is not a harmless choice: the `lsu` is handed the ALU
+    result as the access address, so it would store to rs1+rs2 and the address
+    check would usually reject the access outright.
     """
     for word, op1, op2, name in (
         (ADD, OP1_RS1, OP2_RS2, "ADD"),
         (BEQ, OP1_RS1, OP2_RS2, "BEQ"),
-        (SW, OP1_RS1, OP2_RS2, "SW"),
+        (SW, OP1_RS1, OP2_IMM, "SW"),
         (ADDI, OP1_RS1, OP2_IMM, "ADDI"),
         (LW, OP1_RS1, OP2_IMM, "LW"),
         (JALR, OP1_RS1, OP2_IMM, "JALR"),

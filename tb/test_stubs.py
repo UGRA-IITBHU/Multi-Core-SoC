@@ -296,14 +296,14 @@ CONTRACT = {
 # Still stubbed:
 #   alu         core        ex_stage
 #   lsu         mem_stage   wb_stage
-STILL_STUBBED = {
-    "alu",
-    "core",
-    "ex_stage",
-    "lsu",
-    "mem_stage",
-    "wb_stage",
-}
+#
+# Updated once the five blocks landed and their bodies were filled in.  `core`
+# was the last one: it is the integrator's module and was written last, once
+# every block it wires together existed.  Nothing in CONTRACT is a stub now, so
+# this set is empty - it stays as a set rather than being deleted so that a
+# future module added to CONTRACT and not yet implemented has an obvious home
+# and the test below keeps both sets honest.
+STILL_STUBBED: set = set()
 
 # Everything else in CONTRACT is implemented and is covered by a real cocotb
 # regression instead.  Derived rather than listed, so adding a module to

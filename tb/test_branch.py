@@ -776,9 +776,19 @@ async def test_reg_write_is_a_pass_through_of_the_decode_bit(dut):
     implies a meaningful rd, and `ex_rd_addr` already carries that guarantee in
     the index itself.  Gating here as well would turn a decoder bug into a
     silently dropped write.
+
+    The fourth combination, reg_write=1 with uses_rd=0, is deliberately NOT
+    driven here.  `ex_stage` declares that combination impossible and asserts on
+    it (`assert (!id_reg_write || id_uses_rd)`), because it is what a decoder bug
+    looks like on this stage's inputs.  `$error` under `--assert` stops the
+    simulation, so driving it would abort the run rather than test anything.  The
+    assertion is the thing that owns that combination; this test owns the three
+    legal ones.
     """
     for reg_write in (0, 1):
         for uses_rd in (0, 1):
+            if reg_write and not uses_rd:
+                continue  # illegal by construction - see docstring
             await drive(dut, id_reg_write=reg_write, id_uses_rd=uses_rd)
             assert int(dut.ex_reg_write.value) == reg_write, (
                 "reg_write=%d uses_rd=%d came through as %d"
@@ -794,6 +804,12 @@ async def test_the_memory_and_writeback_controls_pass_through_unchanged(dut):
     register, and it is carried to writeback through the EX/MEM bundle, so a
     dropped or reordered bit here loses the return address on every jump in the
     program.
+
+    `mem_size` 3 is a don't-care encoding.  `ex_stage` asserts it cannot appear
+    alongside a memory operation (`assert (!(id_mem_read || id_mem_write) ||
+    (id_mem_size <= MEM_WORD))`), so sweeping it under read/write aborts the
+    simulation via `$error` rather than testing anything.  It is swept here only
+    with no memory operation asserted, which is the case the assertion permits.
     """
     for wb_sel in (0, 1, 2, 3):
         await drive(dut, id_wb_sel=wb_sel)
@@ -801,11 +817,15 @@ async def test_the_memory_and_writeback_controls_pass_through_unchanged(dut):
             "wb_sel %d came through as %d" % (wb_sel, int(dut.ex_wb_sel.value))
         )
 
-    for size in (0, 1, 2, 3):
+    for size in (0, 1, 2):
         await drive(dut, id_mem_size=size, id_mem_read=1)
         assert int(dut.ex_mem_size.value) == size
         await drive(dut, id_mem_size=size, id_mem_write=1)
         assert int(dut.ex_mem_size.value) == size
+
+    # mem_size 3 with no memory operation: legal, and must pass through verbatim.
+    await drive(dut, id_mem_size=3, id_mem_read=0, id_mem_write=0)
+    assert int(dut.ex_mem_size.value) == 3
 
     for unsigned in (0, 1):
         await drive(dut, id_mem_unsigned=unsigned, id_mem_read=1)
@@ -813,6 +833,8 @@ async def test_the_memory_and_writeback_controls_pass_through_unchanged(dut):
 
     for read in (0, 1):
         for write in (0, 1):
+            if read and write:
+                continue  # illegal by construction - ex_stage asserts on it
             await drive(dut, id_mem_read=read, id_mem_write=write)
             assert int(dut.ex_mem_read.value) == read
             assert int(dut.ex_mem_write.value) == write

@@ -1,5 +1,6 @@
 # SDD scratch workspace - ledger, briefs, reports, review packages
 .superpowers/
+.DS_Store
 
 # Fetched or generated, never committed
 third_party/

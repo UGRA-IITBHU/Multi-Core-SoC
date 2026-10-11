@@ -517,17 +517,23 @@ module decode (
         end
 
         // ---- STORE: SB / SH / SW ------------------------------------------
-        // The store data is rs2, so `op2_sel = rs2` rather than imm; the
-        // address arithmetic is op1 = rs1, op2 = imm exactly as for a load.
-        // `ex_stage` takes the store value from rs2 directly, so a store sets
-        // neither wb_sel nor reg_write.  funct3 011..111 stay illegal.
+        // The effective address is rs1 + imm exactly as for a load, so
+        // `op2_sel` is the immediate -- the ALU's job here is the *address*,
+        // and its result is what `core` hands the `lsu` as the access address.
+        // (Choosing rs2 would make the ALU add the stored value to rs1 and
+        // quietly produce a garbage address, which the `lsu` then refuses as
+        // misaligned -- a store that silently never happens.)
+        //
+        // The stored *value* is rs2, but it never reaches the ALU: `ex_stage`
+        // takes it straight off `ex_rs2_data` into `ex_store_data`. So a store
+        // sets neither wb_sel nor reg_write.  funct3 011..111 stay illegal.
         OP_STORE: begin
           case (funct3)
             3'b000: begin  // SB
               is_illegal_r = 1'b0;
               alu_op_r     = ALU_ADD;
               op1_sel_r    = OP1_RS1;
-              op2_sel_r    = OP2_RS2;
+              op2_sel_r    = OP2_IMM;
               imm_sel_r    = IMM_S;
               mem_write_r  = 1'b1;
               mem_size_r   = MEM_BYTE;
@@ -539,7 +545,7 @@ module decode (
               is_illegal_r = 1'b0;
               alu_op_r     = ALU_ADD;
               op1_sel_r    = OP1_RS1;
-              op2_sel_r    = OP2_RS2;
+              op2_sel_r    = OP2_IMM;
               imm_sel_r    = IMM_S;
               mem_write_r  = 1'b1;
               mem_size_r   = MEM_HALF;
@@ -551,7 +557,7 @@ module decode (
               is_illegal_r = 1'b0;
               alu_op_r     = ALU_ADD;
               op1_sel_r    = OP1_RS1;
-              op2_sel_r    = OP2_RS2;
+              op2_sel_r    = OP2_IMM;
               imm_sel_r    = IMM_S;
               mem_write_r  = 1'b1;
               mem_size_r   = MEM_WORD;

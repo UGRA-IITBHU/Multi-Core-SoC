@@ -108,7 +108,11 @@ module alu (
   wire signed [`p_XLEN-1:0] op_a_s = op_a;
   wire signed [`p_XLEN-1:0] op_b_s = op_b;
 
-  wire [`p_XLEN-1:0] shamt = op_b[SHIFT_AMT_W-1:0];
+  // The shift-amount field is unsigned, so the widening is a zero-extension.
+  // Written out explicitly rather than relying on implicit assignment
+  // extension: WIDTHEXPAND is a hard lint error in this project.
+  wire [`p_XLEN-1:0] shamt =
+      {{(`p_XLEN-SHIFT_AMT_W){1'b0}}, op_b[SHIFT_AMT_W-1:0]};
 
   // The two comparison results, widened to `p_XLEN` once here so that the case
   // below can hand them straight to `result_r`.  A concatenation may not use a
