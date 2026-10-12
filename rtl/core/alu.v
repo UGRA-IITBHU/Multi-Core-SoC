@@ -65,16 +65,27 @@ module alu (
   // This is a cross-owner agreement, not a port change, so it needs no contract
   // change - but if the two files ever disagree, one of them has to move.
   // --------------------------------------------------------------------------
-  localparam [`p_ALU_OP_W-1:0] ALU_ADD  = 4'd0;
-  localparam [`p_ALU_OP_W-1:0] ALU_SUB  = 4'd1;
-  localparam [`p_ALU_OP_W-1:0] ALU_SLL  = 4'd2;
-  localparam [`p_ALU_OP_W-1:0] ALU_SLT  = 4'd3;
-  localparam [`p_ALU_OP_W-1:0] ALU_SLTU = 4'd4;
-  localparam [`p_ALU_OP_W-1:0] ALU_XOR  = 4'd5;
-  localparam [`p_ALU_OP_W-1:0] ALU_SRL  = 4'd6;
-  localparam [`p_ALU_OP_W-1:0] ALU_SRA  = 4'd7;
-  localparam [`p_ALU_OP_W-1:0] ALU_OR   = 4'd8;
-  localparam [`p_ALU_OP_W-1:0] ALU_AND  = 4'd9;
+  localparam [`p_ALU_OP_W-1:0] ALU_ADD   = 5'd0;
+  localparam [`p_ALU_OP_W-1:0] ALU_SUB   = 5'd1;
+  localparam [`p_ALU_OP_W-1:0] ALU_SLL   = 5'd2;
+  localparam [`p_ALU_OP_W-1:0] ALU_SLT   = 5'd3;
+  localparam [`p_ALU_OP_W-1:0] ALU_SLTU  = 5'd4;
+  localparam [`p_ALU_OP_W-1:0] ALU_XOR   = 5'd5;
+  localparam [`p_ALU_OP_W-1:0] ALU_SRL   = 5'd6;
+  localparam [`p_ALU_OP_W-1:0] ALU_SRA   = 5'd7;
+  localparam [`p_ALU_OP_W-1:0] ALU_OR    = 5'd8;
+  localparam [`p_ALU_OP_W-1:0] ALU_AND   = 5'd9;
+  // RV32M extension (defined for interface; implemented in later task)
+  /* verilator lint_off UNUSEDPARAM */
+  localparam [`p_ALU_OP_W-1:0] ALU_MUL    = 5'd10;
+  localparam [`p_ALU_OP_W-1:0] ALU_MULH   = 5'd11;
+  localparam [`p_ALU_OP_W-1:0] ALU_MULHSU = 5'd12;
+  localparam [`p_ALU_OP_W-1:0] ALU_MULHU  = 5'd13;
+  localparam [`p_ALU_OP_W-1:0] ALU_DIV    = 5'd14;
+  localparam [`p_ALU_OP_W-1:0] ALU_DIVU   = 5'd15;
+  localparam [`p_ALU_OP_W-1:0] ALU_REM    = 5'd16;
+  localparam [`p_ALU_OP_W-1:0] ALU_REMU   = 5'd17;
+  /* verilator lint_on UNUSEDPARAM */
 
   // Shift amounts are the low SHIFT_AMT_W bits of op_b, per the RISC-V spec:
   // only shamt[4:0] is used and the upper bits are ignored.  SLLI, SRLI and

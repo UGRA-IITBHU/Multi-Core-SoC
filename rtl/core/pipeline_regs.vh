@@ -88,43 +88,43 @@ localparam integer p_ID_EX__OP2_SEL_W          = 3;
 localparam integer p_ID_EX__OP1_SEL_LSB        = 16;
 localparam integer p_ID_EX__OP1_SEL_W          = 2;
 localparam integer p_ID_EX__ALU_OP_LSB         = 18;
-localparam integer p_ID_EX__ALU_OP_W           = 4;
-localparam integer p_ID_EX__RD_ADDR_LSB        = 22;
+localparam integer p_ID_EX__ALU_OP_W           = 5;
+localparam integer p_ID_EX__RD_ADDR_LSB        = 23;
 localparam integer p_ID_EX__RD_ADDR_W          = 5;
-localparam integer p_ID_EX__RS2_ADDR_LSB       = 27;
+localparam integer p_ID_EX__RS2_ADDR_LSB       = 28;
 localparam integer p_ID_EX__RS2_ADDR_W         = 5;
-localparam integer p_ID_EX__RS1_ADDR_LSB       = 32;
+localparam integer p_ID_EX__RS1_ADDR_LSB       = 33;
 localparam integer p_ID_EX__RS1_ADDR_W         = 5;
-localparam integer p_ID_EX__IMM_LSB            = 37;
+localparam integer p_ID_EX__IMM_LSB            = 38;
 localparam integer p_ID_EX__IMM_W              = 32;
-localparam integer p_ID_EX__RS2_DATA_LSB       = 69;
+localparam integer p_ID_EX__RS2_DATA_LSB       = 70;
 localparam integer p_ID_EX__RS2_DATA_W         = 32;
-localparam integer p_ID_EX__RS1_DATA_LSB       = 101;
+localparam integer p_ID_EX__RS1_DATA_LSB       = 102;
 localparam integer p_ID_EX__RS1_DATA_W         = 32;
-localparam integer p_ID_EX__PC_LSB             = 133;
+localparam integer p_ID_EX__PC_LSB             = 134;
 localparam integer p_ID_EX__PC_W               = 32;
 
 // -- control class and register-field meaning -------------------------------
 // `is_branch` / `is_jal` / `is_jalr` are what let `ex_stage` resolve a branch or
 // jump; `uses_rd` says whether the rd field is meaningful; `is_illegal` is the
 // decode verdict that an opcode or funct encoding is not implemented.
-localparam integer p_ID_EX__IS_BRANCH_LSB  = 165;
+localparam integer p_ID_EX__IS_BRANCH_LSB  = 166;
 localparam integer p_ID_EX__IS_BRANCH_W    = 1;
-localparam integer p_ID_EX__IS_JAL_LSB     = 166;
+localparam integer p_ID_EX__IS_JAL_LSB     = 167;
 localparam integer p_ID_EX__IS_JAL_W       = 1;
-localparam integer p_ID_EX__IS_JALR_LSB    = 167;
+localparam integer p_ID_EX__IS_JALR_LSB    = 168;
 localparam integer p_ID_EX__IS_JALR_W      = 1;
-localparam integer p_ID_EX__IS_ILLEGAL_LSB = 168;
+localparam integer p_ID_EX__IS_ILLEGAL_LSB = 169;
 localparam integer p_ID_EX__IS_ILLEGAL_W   = 1;
-localparam integer p_ID_EX__USES_RD_LSB    = 169;
+localparam integer p_ID_EX__USES_RD_LSB    = 170;
 localparam integer p_ID_EX__USES_RD_W      = 1;
 
-localparam integer p_ID_EX__VALID_LSB      = 170;
+localparam integer p_ID_EX__VALID_LSB      = 171;
 localparam integer p_ID_EX__VALID_W        = 1;
 // Appended above VALID (Phase 2, compressed): instruction length in bytes.
-localparam integer p_ID_EX__INSTR_LEN_LSB  = 171;
+localparam integer p_ID_EX__INSTR_LEN_LSB  = 172;
 localparam integer p_ID_EX__INSTR_LEN_W    = 3;
-localparam integer p_ID_EX_W               = 174;
+localparam integer p_ID_EX_W               = 175;
 
 // ===========================================================================
 // EX/MEM bundle  (width 112)

@@ -137,16 +137,27 @@ module ex_stage (
   // same operation table.  This duplication is a consequence of the frozen
   // source-list rule and is reported as such.
   // --------------------------------------------------------------------------
-  localparam [`p_ALU_OP_W-1:0] ALU_ADD  = 4'd0;
-  localparam [`p_ALU_OP_W-1:0] ALU_SUB  = 4'd1;
-  localparam [`p_ALU_OP_W-1:0] ALU_SLL  = 4'd2;
-  localparam [`p_ALU_OP_W-1:0] ALU_SLT  = 4'd3;
-  localparam [`p_ALU_OP_W-1:0] ALU_SLTU = 4'd4;
-  localparam [`p_ALU_OP_W-1:0] ALU_XOR  = 4'd5;
-  localparam [`p_ALU_OP_W-1:0] ALU_SRL  = 4'd6;
-  localparam [`p_ALU_OP_W-1:0] ALU_SRA  = 4'd7;
-  localparam [`p_ALU_OP_W-1:0] ALU_OR   = 4'd8;
-  localparam [`p_ALU_OP_W-1:0] ALU_AND  = 4'd9;
+  localparam [`p_ALU_OP_W-1:0] ALU_ADD   = 5'd0;
+  localparam [`p_ALU_OP_W-1:0] ALU_SUB   = 5'd1;
+  localparam [`p_ALU_OP_W-1:0] ALU_SLL   = 5'd2;
+  localparam [`p_ALU_OP_W-1:0] ALU_SLT   = 5'd3;
+  localparam [`p_ALU_OP_W-1:0] ALU_SLTU  = 5'd4;
+  localparam [`p_ALU_OP_W-1:0] ALU_XOR   = 5'd5;
+  localparam [`p_ALU_OP_W-1:0] ALU_SRL   = 5'd6;
+  localparam [`p_ALU_OP_W-1:0] ALU_SRA   = 5'd7;
+  localparam [`p_ALU_OP_W-1:0] ALU_OR    = 5'd8;
+  localparam [`p_ALU_OP_W-1:0] ALU_AND   = 5'd9;
+  // RV32M extension (defined for interface; used by hazard/forwarding in later tasks)
+  /* verilator lint_off UNUSEDPARAM */
+  localparam [`p_ALU_OP_W-1:0] ALU_MUL    = 5'd10;
+  localparam [`p_ALU_OP_W-1:0] ALU_MULH   = 5'd11;
+  localparam [`p_ALU_OP_W-1:0] ALU_MULHSU = 5'd12;
+  localparam [`p_ALU_OP_W-1:0] ALU_MULHU  = 5'd13;
+  localparam [`p_ALU_OP_W-1:0] ALU_DIV    = 5'd14;
+  localparam [`p_ALU_OP_W-1:0] ALU_DIVU   = 5'd15;
+  localparam [`p_ALU_OP_W-1:0] ALU_REM    = 5'd16;
+  localparam [`p_ALU_OP_W-1:0] ALU_REMU   = 5'd17;
+  /* verilator lint_on UNUSEDPARAM */
 
   // `op1_sel` / `op2_sel`, frozen by the contract.
   localparam [`p_OP1_SEL_W-1:0] OP1_RS1  = 2'd0;
@@ -405,7 +416,7 @@ module ex_stage (
       assert (!(id_is_branch && id_is_jal) && !(id_is_branch && id_is_jalr) && !(id_is_jal && id_is_jalr)) else $error("ex_stage: is_branch/is_jal/is_jalr are not mutually exclusive");
       assert (!(id_mem_read && id_mem_write)) else $error("ex_stage: both mem_read and mem_write are high");
       assert (!id_reg_write || id_uses_rd) else $error("ex_stage: reg_write without uses_rd would write an index the instruction never meant");
-      assert (id_alu_op <= ALU_AND) else $error("ex_stage: alu_op %h is not an RV32I operation", id_alu_op);
+      assert (id_alu_op <= ALU_REMU) else $error("ex_stage: alu_op %h is not an implemented operation", id_alu_op);
       assert (!(id_mem_read || id_mem_write) || (id_mem_size <= MEM_WORD)) else $error("ex_stage: mem_size 3 is not byte/half/word");
       assert (!ex_target_misaligned || ex_redirect_valid) else $error("ex_stage: a misalignment was reported for a cycle with no redirect");
     end

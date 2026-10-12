@@ -17,7 +17,7 @@
 // ---------------------------------------------------------------------------
 // Field widths
 // ---------------------------------------------------------------------------
-`define p_ALU_OP_W    4  // alu operation select, encoding owned by ex_stage/alu
+`define p_ALU_OP_W    5  // alu operation select, encoding owned by ex_stage/alu
 `define p_OP1_SEL_W   2  // 0 = rs1, 1 = pc, 2 = zero
 `define p_OP2_SEL_W   3  // 0 = rs2, 1 = imm, 2 = 4, 3 = pc
 `define p_IMM_SEL_W   3  // immediate format select, consumed by imm_gen

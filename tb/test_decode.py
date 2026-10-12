@@ -68,6 +68,9 @@ OP_SYSTEM = 0x73
 # implement exactly this table.
 ALU_ADD, ALU_SUB, ALU_SLL, ALU_SLT, ALU_SLTU = 0, 1, 2, 3, 4
 ALU_XOR, ALU_SRL, ALU_SRA, ALU_OR, ALU_AND = 5, 6, 7, 8, 9
+# RV32M extension (ALU_OP_W = 5)
+ALU_MUL, ALU_MULH, ALU_MULHSU, ALU_MULHU = 10, 11, 12, 13
+ALU_DIV, ALU_DIVU, ALU_REM, ALU_REMU = 14, 15, 16, 17
 
 # `op1_sel`
 OP1_RS1, OP1_PC, OP1_ZERO = 0, 1, 2
@@ -592,47 +595,62 @@ async def test_unknown_opcode_does_not_produce_an_add(dut):
 
 
 # ---------------------------------------------------------------------------
-# The M extension - illegal in phase 1, per docs/TEAM.md
+# The M extension - implemented in phase 2
 # ---------------------------------------------------------------------------
 
 
 @cocotb.test()
-async def test_m_extension_is_illegal(dut):
-    """M-extension encodings are illegal here; phase 2 adds them.
+async def test_m_extension_decodes_correctly(dut):
+    """M-extension encodings decode to correct control signals.
 
-    `docs/TEAM.md` is explicit: "Phase 1 is RV32I only, so the M-extension and
-    C-extension encodings are illegal here, not silently ignored."  MUL, MULH,
-    MULHSU, MULHU, DIV, DIVU, REM and REMU share opcodes 0110011 and 0010011
-    with the base ALU ops and are told apart only by funct7 == 0000001.  A
-    decoder that checks funct3 but not funct7 decodes all eight as something
-    else - and since funct3 000 would be ADD, `mul x5,x6,x7` becomes an add.
+    MUL, MULH, MULHSU, MULHU, DIV, DIVU, REM, REMU share opcode 0110011
+    with funct7 = 0000001.  All eight use R-type format with rs1, rs2, rd.
     """
-    for funct3, name in (
-        (0b000, "MUL"), (0b001, "MULH"), (0b010, "MULHSU"), (0b011, "MULHU"),
-        (0b100, "DIV"), (0b101, "DIVU"), (0b110, "REM"), (0b111, "REMU"),
+    for funct3, name, alu_op in (
+        (0b000, "MUL",   10),  # ALU_MUL
+        (0b001, "MULH",  11),  # ALU_MULH
+        (0b010, "MULHSU", 12), # ALU_MULHSU
+        (0b011, "MULHU", 13),  # ALU_MULHU
+        (0b100, "DIV",   14),  # ALU_DIV
+        (0b101, "DIVU",  15),  # ALU_DIVU
+        (0b110, "REM",   16),  # ALU_REM
+        (0b111, "REMU",  17),  # ALU_REMU
     ):
-        await expect_illegal(
-            dut, r_type(0x01, RS2, RS1, funct3, RD, OP_OP), "OP " + name
-        )
+        word = r_type(0x01, RS2, RS1, funct3, RD, OP_OP)
+        got = await decode(dut, word)
+        assert got["is_illegal"] == 0, "%s: marked illegal" % name
+        assert got["alu_op"] == alu_op, "%s: alu_op=%d, expected %d" % (name, got["alu_op"], alu_op)
+        assert got["uses_rs1"] == 1, "%s: uses_rs1=0" % name
+        assert got["uses_rs2"] == 1, "%s: uses_rs2=0" % name
+        assert got["uses_rd"] == 1, "%s: uses_rd=0" % name
+        assert got["reg_write"] == 1, "%s: reg_write=0" % name
+        assert got["wb_sel"] == WB_ALU, "%s: wb_sel=%d, expected WB_ALU" % (name, got["wb_sel"])
+        assert got["op1_sel"] == OP1_RS1, "%s: op1_sel=%d, expected OP1_RS1" % (name, got["op1_sel"])
+        assert got["op2_sel"] == OP2_RS2, "%s: op2_sel=%d, expected OP2_RS2" % (name, got["op2_sel"])
+        assert got["is_branch"] == 0, "%s: is_branch=1" % name
+        assert got["is_jal"] == 0, "%s: is_jal=1" % name
+        assert got["is_jalr"] == 0, "%s: is_jalr=1" % name
 
     # Only the R-type form exists: every M-extension instruction is
     # funct7 = 0000001 under opcode 0110011.  There is no M encoding in
-    # 0010011, because in that opcode those seven bits are imm[11:5] - so a
-    # word that looks like `MUL` there is just `addi` with a different immediate,
-    # and is legal.  See
+    # 0010011 (OP_IMM), because in that opcode those seven bits are imm[11:5] -
+    # so a word that looks like `MUL` there is just `addi` with a different
+    # immediate, and is legal.  See
     # test_op_imm_non_shift_forms_accept_every_imm11_to_5_value.
 
 
 @cocotb.test()
 async def test_other_reserved_funct7_values_are_illegal(dut):
-    """In opcode 0110011, funct7 must be 0000000 or (for two funct3s) 0100000.
+    """In opcode 0110011, funct7 must be 0000000, 0000001 (M extension), or
+    0100000 (for two funct3s).
 
-    Only ADD/SUB and SRL/SRA accept the 0100000 funct7.  Every other funct7 is an
-    unimplemented encoding - the M extension among them - and must not be
-    decoded as the base operation it shares funct3 with.
+    Only ADD/SUB and SRL/SRA accept the 0100000 funct7.  funct7 = 0000001 is
+    the M extension (MUL/MULH/MULHSU/MULHU/DIV/DIVU/REM/REMU) and is legal for
+    all eight funct3 values.  Every other funct7 is an unimplemented encoding
+    and must not be decoded as the base operation it shares funct3 with.
     """
     for funct7 in range(0x80):
-        if funct7 in (0x00, 0x20):
+        if funct7 in (0x00, 0x01, 0x20):
             continue
         for funct3 in range(8):
             await expect_illegal(
@@ -1802,25 +1820,25 @@ async def test_alu_op_encoding_is_the_documented_table(dut):
 
 @cocotb.test()
 async def test_alu_op_never_selects_an_unimplemented_operation(dut):
-    """`alu_op` stays within 0..9 for every word, legal or not.
+    """`alu_op` stays within 0..17 for every word, legal or not.
 
-    The field is 4 bits, so 10..15 are spare.  Nothing may select them, because
-    `alu` implements exactly ten operations and would have to invent a
-    behaviour.  Swept over the whole funct7/funct3 space of both ALU opcodes as
-    well as the RV32I table, so it holds even for the encodings that are
-    illegal.
+    The field is 5 bits, so 18..31 are spare.  Nothing may select them, because
+    `alu` implements exactly eighteen operations (RV32I 0..9 + RV32M 10..17) and
+    would have to invent a behaviour.  Swept over the whole funct7/funct3 space
+    of both ALU opcodes as well as the RV32I table, so it holds even for the
+    encodings that are illegal.
     """
     for name, word, _ in RV32I:
         got = await decode(dut, word)
-        assert got["alu_op"] <= ALU_AND, "%s: alu_op=%d" % (name, got["alu_op"])
+        assert got["alu_op"] <= ALU_REMU, "%s: alu_op=%d" % (name, got["alu_op"])
 
     for opcode in (OP_OP, OP_OP_IMM):
         for funct7 in range(0x80):
             for funct3 in range(8):
                 word = r_type(funct7, RS2, RS1, funct3, RD, opcode)
                 got = await decode(dut, word)
-                assert got["alu_op"] <= ALU_AND, (
-                    "instr=%08x gave alu_op=%d, above 9" % (word, got["alu_op"])
+                assert got["alu_op"] <= ALU_REMU, (
+                    "instr=%08x gave alu_op=%d, above 17" % (word, got["alu_op"])
                 )
 
     # And for every other opcode too.
@@ -1828,8 +1846,8 @@ async def test_alu_op_never_selects_an_unimplemented_operation(dut):
         for funct3 in range(8):
             word = (0xFFFFFFFF & ~0x7FFF) | (funct3 << 12) | opcode
             got = await decode(dut, word)
-            assert got["alu_op"] <= ALU_AND, (
-                "instr=%08x gave alu_op=%d, above 9" % (word, got["alu_op"])
+            assert got["alu_op"] <= ALU_REMU, (
+                "instr=%08x gave alu_op=%d, above 17" % (word, got["alu_op"])
             )
 
 

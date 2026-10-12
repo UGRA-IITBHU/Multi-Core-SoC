@@ -222,16 +222,25 @@ module decode (
   // table.  The names are localparams so neither side can misspell an encoding
   // as a bare literal.
   // --------------------------------------------------------------------------
-  localparam [`p_ALU_OP_W-1:0] ALU_ADD  = 4'd0;
-  localparam [`p_ALU_OP_W-1:0] ALU_SUB  = 4'd1;
-  localparam [`p_ALU_OP_W-1:0] ALU_SLL  = 4'd2;
-  localparam [`p_ALU_OP_W-1:0] ALU_SLT  = 4'd3;
-  localparam [`p_ALU_OP_W-1:0] ALU_SLTU = 4'd4;
-  localparam [`p_ALU_OP_W-1:0] ALU_XOR  = 4'd5;
-  localparam [`p_ALU_OP_W-1:0] ALU_SRL  = 4'd6;
-  localparam [`p_ALU_OP_W-1:0] ALU_SRA  = 4'd7;
-  localparam [`p_ALU_OP_W-1:0] ALU_OR   = 4'd8;
-  localparam [`p_ALU_OP_W-1:0] ALU_AND  = 4'd9;
+  localparam [`p_ALU_OP_W-1:0] ALU_ADD   = 5'd0;
+  localparam [`p_ALU_OP_W-1:0] ALU_SUB   = 5'd1;
+  localparam [`p_ALU_OP_W-1:0] ALU_SLL   = 5'd2;
+  localparam [`p_ALU_OP_W-1:0] ALU_SLT   = 5'd3;
+  localparam [`p_ALU_OP_W-1:0] ALU_SLTU  = 5'd4;
+  localparam [`p_ALU_OP_W-1:0] ALU_XOR   = 5'd5;
+  localparam [`p_ALU_OP_W-1:0] ALU_SRL   = 5'd6;
+  localparam [`p_ALU_OP_W-1:0] ALU_SRA   = 5'd7;
+  localparam [`p_ALU_OP_W-1:0] ALU_OR    = 5'd8;
+  localparam [`p_ALU_OP_W-1:0] ALU_AND   = 5'd9;
+  // RV32M extension (requires p_ALU_OP_W = 5)
+  localparam [`p_ALU_OP_W-1:0] ALU_MUL    = 5'd10;
+  localparam [`p_ALU_OP_W-1:0] ALU_MULH   = 5'd11;
+  localparam [`p_ALU_OP_W-1:0] ALU_MULHSU = 5'd12;
+  localparam [`p_ALU_OP_W-1:0] ALU_MULHU  = 5'd13;
+  localparam [`p_ALU_OP_W-1:0] ALU_DIV    = 5'd14;
+  localparam [`p_ALU_OP_W-1:0] ALU_DIVU   = 5'd15;
+  localparam [`p_ALU_OP_W-1:0] ALU_REM    = 5'd16;
+  localparam [`p_ALU_OP_W-1:0] ALU_REMU   = 5'd17;
 
   // `op1_sel` / `op2_sel`, frozen by the contract.
   localparam [`p_OP1_SEL_W-1:0] OP1_RS1  = 2'd0;
@@ -291,6 +300,7 @@ module decode (
   // extension included, is rejected.
   localparam [6:0] F7_ALU  = 7'b000_0000;
   localparam [6:0] F7_ALT  = 7'b010_0000;  // SUB / SRA
+  localparam [6:0] F7_M    = 7'b000_0001;  // RV32M extension (MUL/DIV/REM)
 
   // --------------------------------------------------------------------------
   // Instruction fields.  `decode` deliberately has no rs1/rs2/rd *outputs*:
@@ -892,38 +902,86 @@ module decode (
         // ---- OP: ADD SUB SLL SLT SLTU XOR SRL SRA OR AND -------------------
         // funct3 000 and 101 accept two funct7 values (ADD/SUB, SRL/SRA); the
         // other six accept only F7_ALU.  funct7 0000001 is the M extension and
-        // is rejected by construction rather than by a special case.
+        // is handled in the F7_M branch below.
         OP_OP: begin
-          case (funct3)
-            3'b000: begin
-              if (funct7 == F7_ALU) begin
-                is_illegal_r = 1'b0; alu_op_r = ALU_ADD;
-              end else if (funct7 == F7_ALT) begin
-                is_illegal_r = 1'b0; alu_op_r = ALU_SUB;
-              end
+          case (funct7)
+            F7_ALU: begin
+              case (funct3)
+                3'b000: begin  // ADD
+                  is_illegal_r = 1'b0; alu_op_r = ALU_ADD;
+                end
+                3'b001: begin  // SLL
+                  is_illegal_r = 1'b0; alu_op_r = ALU_SLL;
+                end
+                3'b010: begin  // SLT
+                  is_illegal_r = 1'b0; alu_op_r = ALU_SLT;
+                end
+                3'b011: begin  // SLTU
+                  is_illegal_r = 1'b0; alu_op_r = ALU_SLTU;
+                end
+                3'b100: begin  // XOR
+                  is_illegal_r = 1'b0; alu_op_r = ALU_XOR;
+                end
+                3'b101: begin  // SRL
+                  is_illegal_r = 1'b0; alu_op_r = ALU_SRL;
+                end
+                3'b110: begin  // OR
+                  is_illegal_r = 1'b0; alu_op_r = ALU_OR;
+                end
+                3'b111: begin  // AND
+                  is_illegal_r = 1'b0; alu_op_r = ALU_AND;
+                end
+                default: begin
+                end
+              endcase
             end
 
-            3'b101: begin
-              if (funct7 == F7_ALU) begin
-                is_illegal_r = 1'b0; alu_op_r = ALU_SRL;
-              end else if (funct7 == F7_ALT) begin
-                is_illegal_r = 1'b0; alu_op_r = ALU_SRA;
-              end
+            F7_ALT: begin
+              case (funct3)
+                3'b000: begin  // SUB
+                  is_illegal_r = 1'b0; alu_op_r = ALU_SUB;
+                end
+                3'b101: begin  // SRA
+                  is_illegal_r = 1'b0; alu_op_r = ALU_SRA;
+                end
+                default: begin
+                end
+              endcase
+            end
+
+            F7_M: begin  // RV32M extension
+              case (funct3)
+                3'b000: begin  // MUL
+                  is_illegal_r = 1'b0; alu_op_r = ALU_MUL;
+                end
+                3'b001: begin  // MULH
+                  is_illegal_r = 1'b0; alu_op_r = ALU_MULH;
+                end
+                3'b010: begin  // MULHSU
+                  is_illegal_r = 1'b0; alu_op_r = ALU_MULHSU;
+                end
+                3'b011: begin  // MULHU
+                  is_illegal_r = 1'b0; alu_op_r = ALU_MULHU;
+                end
+                3'b100: begin  // DIV
+                  is_illegal_r = 1'b0; alu_op_r = ALU_DIV;
+                end
+                3'b101: begin  // DIVU
+                  is_illegal_r = 1'b0; alu_op_r = ALU_DIVU;
+                end
+                3'b110: begin  // REM
+                  is_illegal_r = 1'b0; alu_op_r = ALU_REM;
+                end
+                3'b111: begin  // REMU
+                  is_illegal_r = 1'b0; alu_op_r = ALU_REMU;
+                end
+                default: begin
+                end
+              endcase
             end
 
             default: begin
-              if (funct7 == F7_ALU) begin
-                is_illegal_r = 1'b0;
-                case (funct3)
-                  3'b001: alu_op_r = ALU_SLL;
-                  3'b010: alu_op_r = ALU_SLT;
-                  3'b011: alu_op_r = ALU_SLTU;
-                  3'b100: alu_op_r = ALU_XOR;
-                  3'b110: alu_op_r = ALU_OR;
-                  3'b111: alu_op_r = ALU_AND;
-                  default: alu_op_r = ALU_ADD;  // unreachable
-                endcase
-              end
+              // Other funct7 values are reserved/illegal
             end
           endcase
 
@@ -994,7 +1052,8 @@ module decode (
     assert (!((is_branch_r + is_jal_r + is_jalr_r) > 1)) else $error("decode: is_branch/is_jal/is_jalr are not mutually exclusive");
     assert (!is_illegal_r || !(reg_write_r || mem_read_r || mem_write_r)) else $error("decode: illegal encoding has a side effect");
     assert (!is_illegal_r || !(is_branch_r || is_jal_r || is_jalr_r)) else $error("decode: illegal encoding is also a branch or jump");
-    assert (alu_op_r <= ALU_AND) else $error("decode: alu_op %h is not an RV32I operation", alu_op_r);
+    // RV32I: 0-9, RV32M: 10-17
+  assert (alu_op_r <= ALU_REMU) else $error("decode: alu_op %h is not an implemented operation", alu_op_r);
     assert (!(mem_read_r && mem_write_r)) else $error("decode: both mem_read and mem_write are high");
   end
 
