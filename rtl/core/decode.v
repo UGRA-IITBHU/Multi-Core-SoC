@@ -456,13 +456,72 @@ module decode (
     end
   endfunction
 
+  function [`p_INSTR_W-1:0] rvc_q2;
+    /* verilator lint_off UNUSEDSIGNAL */
+    // h[1:0] is the quadrant selector, spent in `rvc_expand` before dispatch.
+    input [15:0] h;
+    /* verilator lint_on UNUSEDSIGNAL */
+    reg [4:0]  rd;
+    reg [4:0]  rs1;
+    reg [4:0]  rs2;
+    reg [11:0] imm;
+    begin
+      // Quadrant 2 uses full 5-bit register fields, unlike quadrant 1.
+      rd     = h[11:7];
+      rs1    = h[11:7];      // C.JR / C.JALR source
+      rs2    = h[6:2];
+      imm    = 12'b0;
+      rvc_q2 = 32'h0000_0000;
+      case (h[15:13])
+        3'b000: begin  // C.SLLI -> slli rd, rd, shamt  (RV32: shamt[5] == 0)
+          if (h[12] == 1'b0)
+            rvc_q2 = {7'b0, h[6:2], rd, 3'b001, rd, OP_OP_IMM};
+        end
+        3'b010: begin  // C.LWSP -> lw rd, offset(x2)
+          imm = {4'b0, h[3:2], h[12], h[6:4], 2'b00};
+          if (rd != 5'd0)
+            rvc_q2 = {imm, 5'd2, 3'b010, rd, OP_LOAD};
+        end
+        3'b100: begin
+          if (h[12] == 1'b0) begin  // C.JR / C.MV
+            if (rs2 == 5'd0) begin  // C.JR -> jalr x0, 0(rs1)
+              if (rs1 != 5'd0)
+                rvc_q2 = {12'b0, rs1, 3'b000, 5'd0, OP_JALR};
+            end
+            else  // C.MV -> add rd, x0, rs2
+              rvc_q2 = {7'b0, rs2, 5'd0, 3'b000, rd, OP_OP};
+          end
+          else begin  // C.EBREAK / C.JALR / C.ADD
+            if (rs2 == 5'd0) begin
+              if (rs1 == 5'd0)  // C.EBREAK (rd == 0 and rs2 == 0)
+                rvc_q2 = {12'h001, 5'd0, 3'b000, 5'd0, OP_SYSTEM};
+              else  // C.JALR -> jalr x1, 0(rs1)
+                rvc_q2 = {12'b0, rs1, 3'b000, 5'd1, OP_JALR};
+            end
+            else  // C.ADD -> add rd, rd, rs2
+              rvc_q2 = {7'b0, rs2, rd, 3'b000, rd, OP_OP};
+          end
+        end
+        3'b110: begin  // C.SWSP -> sw rs2, offset(x2)
+          imm = {4'b0, h[8:7], h[12:9], 2'b00};
+          rvc_q2 = {imm[11:5], rs2, 5'd2, 3'b010, imm[4:0], OP_STORE};
+        end
+        default: begin
+          // C.FLDSP (001), C.LDSP (011), C.FSDSP (101) and C.SDSP (111) are
+          // not RV32I: they stay 0 and decode illegal.
+        end
+      endcase
+    end
+  endfunction
+
   function [`p_INSTR_W-1:0] rvc_expand;
     input [15:0] h;
     begin
       case (h[1:0])
         2'b00:   rvc_expand = rvc_q0(h);
         2'b01:   rvc_expand = rvc_q1(h);
-        default: rvc_expand = 32'h0000_0000;  // quadrant 2 not yet expanded
+        2'b10:   rvc_expand = rvc_q2(h);
+        default: rvc_expand = 32'h0000_0000;
       endcase
     end
   endfunction

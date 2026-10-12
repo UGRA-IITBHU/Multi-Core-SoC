@@ -1113,6 +1113,137 @@ async def test_rv64_quadrant1_forms_are_illegal(dut):
     await expect_illegal(dut, 0x9C89, "c.subw s1, a0")
 
 
+# --- quadrant 2 ------------------------------------------------------------
+#
+# As above: toolchain words in, toolchain words out.
+
+C_SLLI_S1_3 = 0x048E           # c.slli s1, 3
+C_LWSP_T0_4_SP = 0x4292        # c.lwsp t0, 4(sp)
+C_JR_RA = 0x8082               # c.jr ra   (the `ret` the toolchain emits)
+C_MV_T0_T1 = 0x829A            # c.mv t0, t1
+C_EBREAK = 0x9002              # c.ebreak
+C_JALR_RA = 0x9082             # c.jalr ra
+C_ADD_T0_T1 = 0x929A           # c.add t0, t1
+C_SWSP_S1_8_SP = 0xC426        # c.swsp s1, 8(sp)
+
+
+@cocotb.test()
+async def test_c_slli_expands_to_slli(dut):
+    """c.slli rd, shamt == `slli rd, rd, shamt` (shamt[5] must be 0 in RV32)."""
+    eff = await expanded(dut, C_SLLI_S1_3)
+    assert eff == 0x00349493, "c.slli s1,3 expanded to %08x, expected 0x00349493" % eff
+    assert (eff_opcode(eff), eff_rd(eff), eff_rs1(eff), (eff >> 20) & 0x1F) == (
+        OP_OP_IMM, 9, 9, 3
+    ), "expanded word is not `slli x9, x9, 3`: %08x" % eff
+    await expect_fields(dut, C_SLLI_S1_3, "c.slli s1,3", alu_op=ALU_SLL,
+                        op2_sel=OP2_IMM, imm_sel=IMM_I, uses_rs1=1, uses_rd=1,
+                        reg_write=1)
+
+
+@cocotb.test()
+async def test_c_lwsp_expands_to_lw(dut):
+    """c.lwsp rd, offset == `lw rd, offset(x2)`; rd == x0 is reserved."""
+    eff = await expanded(dut, C_LWSP_T0_4_SP)
+    assert eff == 0x00412283, "c.lwsp t0,4(sp) expanded to %08x, expected 0x00412283" % eff
+    assert (eff_opcode(eff), eff_rd(eff), eff_rs1(eff), eff_imm_i(eff)) == (
+        OP_LOAD, 5, 2, 4
+    ), "expanded word is not `lw x5, 4(x2)`: %08x" % eff
+    await expect_fields(dut, C_LWSP_T0_4_SP, "c.lwsp t0,4(sp)", alu_op=ALU_ADD,
+                        op1_sel=OP1_RS1, op2_sel=OP2_IMM, imm_sel=IMM_I,
+                        mem_read=1, mem_size=MEM_WORD, uses_rs1=1, uses_rd=1,
+                        reg_write=1, wb_sel=WB_MEM)
+
+
+@cocotb.test()
+async def test_c_swsp_expands_to_sw(dut):
+    """c.swsp rs2, offset == `sw rs2, offset(x2)`."""
+    eff = await expanded(dut, C_SWSP_S1_8_SP)
+    assert eff == 0x00912423, "c.swsp s1,8(sp) expanded to %08x, expected 0x00912423" % eff
+    assert (eff_opcode(eff), eff_rs1(eff), eff_rs2(eff), eff_imm_s(eff)) == (
+        OP_STORE, 2, 9, 8
+    ), "expanded word is not `sw x9, 8(x2)`: %08x" % eff
+    await expect_fields(dut, C_SWSP_S1_8_SP, "c.swsp s1,8(sp)", alu_op=ALU_ADD,
+                        op1_sel=OP1_RS1, op2_sel=OP2_IMM, imm_sel=IMM_S,
+                        mem_write=1, mem_size=MEM_WORD, uses_rs1=1, uses_rs2=1,
+                        reg_write=0)
+
+
+@cocotb.test()
+async def test_c_jr_expands_to_jalr_x0(dut):
+    """c.jr rs1 == `jalr x0, 0(rs1)`: rd is discarded, so it is a plain jump."""
+    eff = await expanded(dut, C_JR_RA)
+    assert eff == 0x00008067, "c.jr ra expanded to %08x, expected 0x00008067" % eff
+    assert (eff_opcode(eff), eff_rd(eff), eff_rs1(eff), eff_imm_i(eff)) == (
+        OP_JALR, 0, 1, 0
+    ), "expanded word is not `jalr x0, 0(x1)`: %08x" % eff
+    await expect_fields(dut, C_JR_RA, "c.jr ra", op2_sel=OP2_IMM, imm_sel=IMM_I,
+                        is_jalr=1, uses_rs1=1, uses_rd=1, reg_write=1, wb_sel=WB_PC4)
+
+
+@cocotb.test()
+async def test_c_jalr_expands_to_jalr_x1(dut):
+    """c.jalr rs1 == `jalr x1, 0(rs1)`."""
+    eff = await expanded(dut, C_JALR_RA)
+    assert eff == 0x000080E7, "c.jalr ra expanded to %08x, expected 0x000080E7" % eff
+    assert (eff_opcode(eff), eff_rd(eff), eff_rs1(eff)) == (OP_JALR, 1, 1), (
+        "expanded word is not `jalr x1, 0(x1)`: %08x" % eff
+    )
+    await expect_fields(dut, C_JALR_RA, "c.jalr ra", imm_sel=IMM_I, is_jalr=1,
+                        uses_rs1=1, uses_rd=1, reg_write=1, wb_sel=WB_PC4)
+
+
+@cocotb.test()
+async def test_c_mv_expands_to_add_rd_x0_rs2(dut):
+    """c.mv rd, rs2 == `add rd, x0, rs2` (a copy through x0)."""
+    eff = await expanded(dut, C_MV_T0_T1)
+    assert eff == 0x006002B3, "c.mv t0,t1 expanded to %08x, expected 0x006002B3" % eff
+    assert (eff_opcode(eff), eff_rd(eff), eff_rs1(eff), eff_rs2(eff)) == (
+        OP_OP, 5, 0, 6
+    ), "expanded word is not `add x5, x0, x6`: %08x" % eff
+    await expect_fields(dut, C_MV_T0_T1, "c.mv t0,t1", alu_op=ALU_ADD,
+                        op2_sel=OP2_RS2, uses_rs2=1, uses_rd=1, reg_write=1)
+
+
+@cocotb.test()
+async def test_c_add_expands_to_add_rd_rd_rs2(dut):
+    """c.add rd, rs2 == `add rd, rd, rs2`."""
+    eff = await expanded(dut, C_ADD_T0_T1)
+    assert eff == 0x006282B3, "c.add t0,t1 expanded to %08x, expected 0x006282B3" % eff
+    assert (eff_opcode(eff), eff_rd(eff), eff_rs1(eff), eff_rs2(eff)) == (
+        OP_OP, 5, 5, 6
+    ), "expanded word is not `add x5, x5, x6`: %08x" % eff
+    await expect_fields(dut, C_ADD_T0_T1, "c.add t0,t1", alu_op=ALU_ADD,
+                        op2_sel=OP2_RS2, uses_rs1=1, uses_rs2=1, uses_rd=1,
+                        reg_write=1)
+
+
+@cocotb.test()
+async def test_c_ebreak_expands_to_ebreak_which_is_illegal(dut):
+    """c.ebreak expands to EBREAK, which the base decoder already rejects.
+
+    There is no trap machinery in phase 1, so this is illegal like ECALL; the
+    point is that the expander produces the real EBREAK word (not 0), so the
+    illegal verdict comes from the base decoder's SYSTEM arm.
+    """
+    eff = await expanded(dut, C_EBREAK)
+    assert eff == 0x00100073, "c.ebreak expanded to %08x, expected 0x00100073" % eff
+    await expect_illegal(dut, C_EBREAK, "c.ebreak")
+
+
+@cocotb.test()
+async def test_quadrant2_reserved_and_rv64_forms_are_illegal(dut):
+    """Reserved encodings and the RV64 / F/D stack forms must not decode."""
+    # reserved: c.jr x0; c.lwsp x0; c.slli with shamt[5] == 1
+    await expect_illegal(dut, 0x8002, "c.jr x0")
+    await expect_illegal(dut, 0x4002, "c.lwsp x0, 0(sp)")
+    await expect_illegal(dut, 0x148E, "c.slli s1, shamt[5] set")
+    # RV64 / D: C.FLDSP, C.LDSP, C.FSDSP, C.SDSP
+    await expect_illegal(dut, 0x2002, "C.FLDSP")
+    await expect_illegal(dut, 0x6002, "C.LDSP")
+    await expect_illegal(dut, 0xA002, "C.FSDSP")
+    await expect_illegal(dut, 0xE002, "C.SDSP")
+
+
 # ---------------------------------------------------------------------------
 # SYSTEM, FENCE, and the reserved funct3 values
 # ---------------------------------------------------------------------------
