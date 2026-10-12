@@ -187,16 +187,35 @@ async def test_instr_is_the_whole_word_when_32_bit(dut):
 
 
 @cocotb.test()
-async def test_high_half_with_a_32_bit_opcode_is_illegal(dut):
-    """A 32-bit opcode at pc[1]==1 is misaligned, not decoded.
+async def test_a_32_bit_instruction_at_a_halfword_offset_is_assembled(dut):
+    """A 32-bit instruction may start at pc[1]==1; it spans two fetched words.
 
-    The high half is 0x9F83 (low two bits 11).  Nothing may present it as the
-    low half of a 32-bit instruction; the stage must present a word that
-    decodes illegal, which here is all-zero.
+    The C extension allows a 32-bit instruction to begin on any 16-bit
+    boundary, so with pc[1]==1 and a 32-bit opcode in the fetched word's high
+    half (0x9F83, low two bits 11) the instruction's low half is
+    ``word0[31:16]`` and its high half is ``word1[15:0]``.  The stage must issue
+    that second read itself and present the assembled word with a length of 4;
+    treating the half as illegal would desynchronise the instruction stream.
     """
-    instr, length = await fetch_at(dut, pc=0x0000_0106, rdata=0x9F83_0000)
-    assert instr == 0x0000_0000
-    assert length == 2
+    await start(dut, pc=0x0000_0106)
+    # Word 0: the high half carries a 32-bit opcode (0x9F83 & 3 == 11).
+    dut.if_rsp_valid.value = 1
+    dut.if_rsp_rdata.value = 0x9F83_0000
+    await cycles(dut, 1)
+    # The stage must now be requesting the next word.
+    assert int(dut.if_req_valid.value) == 1, "no second fetch for the high half"
+    assert int(dut.if_req_addr.value) == 0x0000_0108, (
+        "second fetch address is 0x%08x, expected 0x0000_0108"
+        % int(dut.if_req_addr.value)
+    )
+    # Word 1: the low half is the instruction's high half.
+    dut.if_rsp_rdata.value = 0x0000_1234
+    await cycles(dut, 1)
+    assert int(dut.instr.value) == 0x1234_9F83, (
+        "assembled instruction is 0x%08x, expected 0x1234_9F83"
+        % int(dut.instr.value)
+    )
+    assert int(dut.instr_len.value) == 4
 
 
 @cocotb.test()

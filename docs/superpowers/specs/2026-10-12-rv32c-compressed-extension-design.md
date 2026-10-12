@@ -46,10 +46,13 @@ software compiled at `-march=rv32imac_zicsr` runs unmodified.
 
 Three properties of the architecture keep the change contained:
 
-1. **The ISA aligns instructions to their own length.** A 32-bit instruction is always
-   4-byte aligned and therefore never straddles a 4-byte fetch word, and a 32-bit
-   instruction can never start at a halfword offset. So a single 4-byte-aligned fetch,
-   plus the low PC bit, is sufficient to select the instruction and determine its length.
+1. **The ISA aligns instructions to 2 bytes when C is present.** A compressed instruction
+   is halfword aligned; a 32-bit instruction is 4-byte aligned *in the base ISA* but, once
+   the C extension is enabled, RISC-V allows a 32-bit instruction to begin on **any 16-bit
+   boundary**, so it may start at `pc[1]==1` and straddle two 4-byte fetch words. A single
+   4-byte-aligned fetch, plus the low PC bit, still selects the instruction and determines
+   its length; when the selection is a 32-bit instruction at `pc[1]==1`, the front end
+   performs a second read of the next word to obtain the instruction's high half.
 2. **The length is decodable at fetch time.** `instr[1:0] != 2'b11` distinguishes compressed
    from 32-bit without any decode-stage information, so the front end needs no feedback path
    from decode to compute the next PC.
@@ -89,21 +92,30 @@ The redirect arm is unchanged — redirect targets are absolute and do not depen
 length of the instruction that raised them.
 
 **`if_stage`.** The fetch returns the 4-byte-aligned word containing `pc`
-(`if_req_addr = {pc[31:2], 2'b00}`), and the stage selects the instruction and its length:
+(`req_addr = {pc[31:2], 2'b00}`), and the stage selects the instruction and its length.
+`pc[1]==0` is always complete in one fetch:
 
-| `pc[1]` | low halfword | presented `instr` | `instr_len` |
-|---------|--------------|-------------------|-------------|
-| 1       | —            | `{16'b0, word[31:16]}` | 2 |
-| 0       | `!= 2'b11`   | `{16'b0, word[15:0]}`  | 2 |
-| 0       | `== 2'b11`   | `word`            | 4 |
+| `pc[1]` | selected half | presented `instr` | `instr_len` | fetches |
+|---------|---------------|-------------------|-------------|---------|
+| 0       | low `!= 2'b11` | `{16'b0, word0[15:0]}` | 2 | 1 |
+| 0       | low `== 2'b11` | `word0`          | 4 | 1 |
+| 1       | high `!= 2'b11` | `{16'b0, word0[31:16]}` | 2 | 1 |
+| 1       | high `== 2'b11` | `{word1[15:0], word0[31:16]}` | 4 | 2 |
 
-When `pc[1]==1` the instruction is necessarily compressed, because a 32-bit instruction
-cannot start at a halfword offset. The presented `instr` always carries the encoding to
-be decoded in its low 16 bits for compressed forms — the unused half is masked to zero —
-and the full word for 32-bit forms, so decode can distinguish them by the same `instr[1:0]`
-test throughout.
+When `pc[1]==1` and the fetched word's high half has low two bits `2'b11`, the encoding is
+a **32-bit** instruction that began at the halfword offset: its low half is `word0[31:16]`
+and its high half is `word1[15:0]` from the next word. That case is legal and the front end
+issues a second read (`req_addr = {pc[31:2], 2'b00} + 4`) to obtain `word1`, then presents
+the assembled word with `instr_len == 4`. A compressed instruction at `pc[1]==1` is
+complete in the high half and needs no second read. Because assembly may span two
+responses, the presented `instr` is a registered value, not a combinational slice of
+`if_rsp_rdata`.
 
-`if_stage` gains an `instr_len` output, carrying the table's third column. It is only
+In every case the presented `instr` carries the encoding to be decoded in its low 16 bits
+for compressed forms — the unused half is masked to zero — and the full word for 32-bit
+forms, so decode can distinguish them by the same `instr[1:0]` test throughout.
+
+`if_stage` gains an `instr_len` output, carrying the table's fourth column. It is only
 meaningful in `ST_HOLD`, which is the one fetch state in which `pc_gen` is not stalled by
 `if_req_valid`: that is the cycle the instruction is consumed and the cycle the step is
 applied, so the length and the step always refer to the same instruction. Its existing
@@ -113,7 +125,8 @@ to zero, so a nonzero word is no longer the right invariant.
 
 ### 4.3 Pipeline bundles
 
-`pipeline_regs.vh` gains a 2-bit instruction length in three bundles:
+`pipeline_regs.vh` gains a 3-bit instruction length in three bundles (3 bits, because the
+byte value 4 does not fit in 2):
 `p_IF_ID__INSTR_LEN`, `p_ID_EX__INSTR_LEN`, `p_EX_MEM__INSTR_LEN`. It is appended after
 each bundle's `VALID` field rather than inserted before it, so no existing `LSB` moves and
 the packing churn stays local to the new fields. It has exactly one consumer.
@@ -150,16 +163,19 @@ and size, not its operation.
 are multiples of 2 and JALR clears bit 0, so a misaligned target cannot arise from a legal
 instruction; the check is retained because it is the invariant a trap would key on.
 
-A 32-bit instruction decoded while `pc[1]==1` is instruction-address-misaligned and is
-reported as illegal by the front end.
+A 32-bit instruction fetched while `pc[1]==1` is **not** misaligned: the C extension
+permits it to start on a halfword boundary, and the front end assembles it from two words
+(§4.2). There is no instruction-address-misalignment condition for 32-bit instructions
+under RV32C beyond the base requirement that the address be 2-byte aligned, which every
+compressed instruction step and every legal branch/jump target already satisfies.
 
 ## 5. Interfaces changed
 
 | Artifact | Change |
 |----------|--------|
 | `rtl/core/pc_gen.v` | add input `pc_step [p_PC_W-1:0]`; drop `p_PC_STEP` |
-| `rtl/core/if_stage.v` | add output `instr_len [1:0]`; aligned fetch address; halfword select; relaxed `ST_HOLD` assertion |
-| `rtl/core/pipeline_regs.vh` | add `p_IF_ID__INSTR_LEN`, `p_ID_EX__INSTR_LEN`, `p_EX_MEM__INSTR_LEN` (2 bits each); renumber `LSB`s above them |
+| `rtl/core/if_stage.v` | add output `instr_len [2:0]`; aligned fetch address; halfword select; second-read assembly of a 32-bit instruction at `pc[1]==1`; registered `instr`; relaxed `ST_HOLD` assertion |
+| `rtl/core/pipeline_regs.vh` | add `p_IF_ID__INSTR_LEN`, `p_ID_EX__INSTR_LEN`, `p_EX_MEM__INSTR_LEN` (3 bits each); renumber `LSB`s above them |
 | `rtl/core/decode.v` | add the RVC expander ahead of the 32-bit decode; remove the "compressed does not exist" position |
 | `rtl/core/ex_stage.v` | target misalignment bit 1 → bit 0 |
 | `rtl/core/core.v` | wire `instr_len` through the three bundles; `wb_value` link uses `em_instr_len` |

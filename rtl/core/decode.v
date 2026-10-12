@@ -240,13 +240,10 @@ module decode (
 
   localparam [`p_OP2_SEL_W-1:0] OP2_RS2  = 3'd0;
   localparam [`p_OP2_SEL_W-1:0] OP2_IMM  = 3'd1;
-  localparam [`p_OP2_SEL_W-1:0] OP2_PC   = 3'd3;
-  // The contract also enumerates op2_sel = 2 ("4", a literal constant 4 as the
-  // second operand).  No RV32I encoding selects it: `ex_stage` adds 4 by using
-  // OP2_PC, which already means "this stage's pc", so a second way to spell
-  // the same constant would be an encoding nothing could ever select.  It is
-  // deliberately not declared here - an unused localparam is a lint warning,
-  // and the contract, not this file, owns the port's encoding.
+  // OP2_PC (3'd3) is defined in `ex_stage.v` where it is used to select the
+  // stage's pc for JAL/JALR target computation.  No RV32I encoding in `decode`
+  // selects OP2_PC (AUIPC uses OP2_IMM).  The contract enumerates op2_sel = 2
+  // ("4", a literal constant 4) but no encoding selects it either.
 
   // `imm_sel`, frozen by the contract: 0 = I, 1 = S, 2 = B, 3 = U, 4 = J.
   localparam [`p_IMM_SEL_W-1:0] IMM_I = 3'd0;
@@ -599,11 +596,14 @@ module decode (
         end
 
         // ---- AUIPC: rd = pc + imm[31:12] -----------------------------------
+        // op1 = pc, op2 = imm.  The immediate is `imm20` shifted left by 12,
+        // which is what `imm_sel = IMM_U` produces; the ALU only ever adds the
+        // two selected operands, so the shift is not an ALU operation.
         OP_AUIPC: begin
           is_illegal_r = 1'b0;
           alu_op_r     = ALU_ADD;
           op1_sel_r    = OP1_PC;
-          op2_sel_r    = OP2_PC;
+          op2_sel_r    = OP2_IMM;
           imm_sel_r    = IMM_U;
           reg_write_r  = 1'b1;
           uses_rd_r    = 1'b1;

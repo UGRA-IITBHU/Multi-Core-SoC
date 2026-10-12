@@ -24,8 +24,8 @@ be wrong in a way that passes a functional test:
    reveal.
 
 4. **`alu_op`, `op1_sel`, `op2_sel` are right per instruction**, including the
-   cases that are easy to get backwards: `lui` adds zero to an immediate,
-   `auipc` adds the PC to the PC, `jal` adds the PC to an immediate, and
+cases that are easy to get backwards: `lui` adds zero to an immediate,
+    `auipc` adds the PC to a U-immediate, `jal` adds the PC to an immediate, and
    branches subtract so that `zero` answers BEQ.
 
 The encoders below are written from the RISC-V spec's opcode/funct tables.  The
@@ -329,9 +329,11 @@ RV32I = [
     ("LUI", LUI, bundle(op1_sel=OP1_ZERO, op2_sel=OP2_IMM, imm_sel=IMM_U,
                         uses_rd=1, reg_write=1)),
 
-    # AUIPC: rd = pc + imm[31:12].  Adds the PC to the PC, so *both* operand
-    # selects are PC - the one instruction where op2_sel is PC.
-    ("AUIPC", AUIPC, bundle(op1_sel=OP1_PC, op2_sel=OP2_PC, imm_sel=IMM_U,
+    # AUIPC: rd = pc + imm[31:12].  Adds the PC to the U-immediate, so op1_sel
+    # is PC and op2_sel is IMM - the same pc+imm shape as JAL's target.  It is
+    # NOT pc+pc: `ex_stage`'s ALU only adds two selected operands, and the shift
+    # left by 12 is already folded into `imm_sel = IMM_U`.
+    ("AUIPC", AUIPC, bundle(op1_sel=OP1_PC, op2_sel=OP2_IMM, imm_sel=IMM_U,
                             uses_rd=1, reg_write=1)),
 
     # JAL: target = pc + imm, link = pc+4.  Reads neither rs1 nor rs2 - see
@@ -1510,7 +1512,7 @@ async def test_operand_selects_per_instruction_class(dut):
     """op1_sel and op2_sel for each class of instruction.
 
     The shapes are: rs1+rs2 (OP, branches), rs1+imm (OP-IMM, loads, JALR,
-    and *stores*), pc+pc (AUIPC), pc+imm (JAL), and zero+imm (LUI).
+    and *stores*), pc+imm (AUIPC and JAL), and zero+imm (LUI).
 
     A store looks like it mixes two shapes - its address is rs1+imm, its data is
     rs2 - but it does not, because the data never goes through the ALU:
@@ -1527,7 +1529,7 @@ async def test_operand_selects_per_instruction_class(dut):
         (LW, OP1_RS1, OP2_IMM, "LW"),
         (JALR, OP1_RS1, OP2_IMM, "JALR"),
         (LUI, OP1_ZERO, OP2_IMM, "LUI"),
-        (AUIPC, OP1_PC, OP2_PC, "AUIPC"),
+        (AUIPC, OP1_PC, OP2_IMM, "AUIPC"),
         (JAL, OP1_PC, OP2_IMM, "JAL"),
     ):
         got = await decode(dut, word)
