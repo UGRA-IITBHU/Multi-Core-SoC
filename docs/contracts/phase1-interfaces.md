@@ -655,7 +655,7 @@ through to its owner with no arbitration between them.
 | `mem_rsp_rdata` | in | 32 | memory, consumed by `lsu` | top-level `mem_rsp_rdata` |
 | `mem_rsp_valid` | in | 1 | memory, consumed by `lsu` | top-level `mem_rsp_valid` |
 
-### IF/ID (width 98) — packed by `core` from `pc_gen` + `if_stage`
+### IF/ID (width 101) — packed by `core` from `pc_gen` + `if_stage`
 
 | Field | Width | Offset | Produced by |
 |---|---|---|---|
@@ -664,8 +664,9 @@ through to its owner with no arbitration between them.
 | `pred_pc` | 32 | 33 | `if_stage` |
 | `instr` | 32 | 65 | `if_stage` |
 | `valid` | 1 | 97 | `core` (`stage_valid[0]`) |
+| `instr_len` | 3 | 98 | `if_stage` |
 
-### ID/EX (width 171) — packed by `core`
+### ID/EX (width 174) — packed by `core`
 
 | Field | Width | Offset | Produced by |
 |---|---|---|---|
@@ -694,6 +695,7 @@ through to its owner with no arbitration between them.
 | `is_illegal` | 1 | 168 | `decode` |
 | `uses_rd` | 1 | 169 | `decode` |
 | `valid` | 1 | 170 | `core` (`stage_valid[1]`) |
+| `instr_len` | 3 | 171 | `if_stage` (via IF/ID) |
 
 The five fields above `pc` were added after the rest of the bundle was frozen,
 so they sit at the top of ID/EX and **no previously frozen offset moves**. All
@@ -701,6 +703,12 @@ five are produced by `decode` and routed into the bundle by `core`.
 `is_branch` / `is_jal` / `is_jalr` reach `ex_stage` as `id_is_branch` /
 `id_is_jal` / `id_is_jalr`; `uses_rd` reaches it as `id_uses_rd`; `is_illegal` is
 read by `core` out of the bundle it owns.
+
+`instr_len` was appended in Phase 2 (compressed extension) above `valid`; the
+value is the length of the instruction in bytes (2 or 4). It is 3 bits, not 2,
+because the value 4 needs bit 2. `core` carries it through ID/EX and EX/MEM so
+the writeback stage can link the address of the *next* instruction (`pc + len`)
+into `rd`, which is what a compressed `c.jal` must do.
 
 Three fields in these tables are produced by **wiring inside `core`**, not by any
 stage module, because the value is already in `core`'s hands or is a fixed bit
@@ -719,7 +727,7 @@ testbench can check the reset-validity guarantee without a hierarchical
 reference. `stage_valid` is a verification-observability port and stays through
 phase 10.
 
-### EX/MEM (width 109) — packed by `core` from `ex_stage` + `lsu`
+### EX/MEM (width 112) — packed by `core` from `ex_stage` + `lsu`
 
 | Field | Width | Offset | Produced by |
 |---|---|---|---|
@@ -733,6 +741,7 @@ phase 10.
 | `alu_result` | 32 | 44 | `ex_stage` |
 | `pc` | 32 | 76 | **`core`**, copied from `id_ex__pc` |
 | `valid` | 1 | 108 | `core` (`stage_valid[2]`) |
+| `instr_len` | 3 | 109 | **`core`**, copied from `id_ex__instr_len` |
 
 ### MEM/WB (width 71) — packed by `core` from `mem_stage`
 

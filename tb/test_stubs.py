@@ -757,8 +757,8 @@ class TestStubContracts(unittest.TestCase):
         with open(os.path.join(RTL_CORE, "pipeline_regs.vh")) as handle:
             regs = handle.read()
         self.assertEqual(
-            len(re.findall(r"localparam\s+integer", regs)), 94,
-            "expected 94 localparams: 4 bundles x (fields x 2 + 1 total width)",
+            len(re.findall(r"localparam\s+integer", regs)), 100,
+            "expected 100 localparams: 4 bundles x (fields x 2 + 1 total width)",
         )
         self.assertNotIn("`define", regs, "pipeline_regs.vh still uses `define")
         for header in ("rtl/common/defs.vh", "rtl/core/ctrl_fields.vh"):

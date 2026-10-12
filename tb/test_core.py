@@ -76,6 +76,23 @@ def _u(opcode, rd, imm):
     return (imm & 0xFFFFF000) | (rd << 7) | opcode
 
 
+def _j(opcode, rd, imm):
+    """JAL: imm is a byte offset and bit 0 is always zero."""
+    imm &= 0x1FFFFF
+    b20 = (imm >> 20) & 1
+    b10_1 = (imm >> 1) & 0x3FF
+    b11 = (imm >> 11) & 1
+    b19_12 = (imm >> 12) & 0xFF
+    return (
+        (b20 << 31)
+        | (b19_12 << 12)
+        | (b11 << 20)
+        | (b10_1 << 21)
+        | (rd << 7)
+        | opcode
+    )
+
+
 OP_IMM = 0x13
 OP = 0x33
 LOAD = 0x03
@@ -83,6 +100,27 @@ STORE = 0x23
 BRANCH = 0x63
 LUI = 0x37
 AUIPC = 0x17
+JAL = 0x6F
+
+
+def c_jal(offset):
+    """Assemble `c.jal offset` (RV32C CJ format, quadrant 1, funct3 001).
+
+    Offset is an 11-bit signed byte displacement; bit 0 is always zero.
+    """
+    imm = offset & 0x7FF
+    h = 0x2000  # funct3 = 001 (C.JAL), quadrant = 01
+    h |= ((imm >> 11) & 1) << 12
+    h |= ((imm >> 4) & 1) << 11
+    h |= ((imm >> 8) & 0x3) << 9
+    h |= ((imm >> 10) & 1) << 8
+    h |= ((imm >> 6) & 1) << 7
+    h |= ((imm >> 7) & 1) << 6
+    h |= ((imm >> 1) & 0x7) << 3
+    h |= ((imm >> 5) & 1) << 2
+    h |= 0b01
+    return h
+
 
 X0 = 0
 
@@ -115,11 +153,20 @@ def lui(rd, imm20):
     return _u(LUI, rd, imm20)
 
 
+def jal(rd, imm):
+    return _j(JAL, rd, imm)
+
+
 # --------------------------------------------------------------------------
 # A dictionary-backed memory on both real port pairs.
 # --------------------------------------------------------------------------
 
 MEM_WORDS = 512  # 2 KB of 32-bit words
+
+# Where a program writes to say it has finished, per the riscv-tests convention
+# and `sw/rv32.ld`. The value is `(result << 1) | 1` for a pass and
+# `(result << 1) | 0` for a failure.
+TOHOST = 0x00080000
 
 # What an unmapped address reads as. 0x00000013 is `addi x0, x0, 0` - the
 # canonical RISC-V NOP. It matters that it is not 0x00000000: zero is not a
@@ -132,6 +179,7 @@ NOP = 0x00000013
 class Memory:
     def __init__(self, dut):
         self.dut = dut
+        self.tohost = None
         self.cells = {}
 
     def load(self, addr, *words):
@@ -147,6 +195,54 @@ class Memory:
 
     def write(self, addr, data):
         self.cells[addr] = data & 0xFFFFFFFF
+
+    def write_strobes(self, addr, data, wstrb):
+        """Apply a write through its byte strobes.
+
+        `lsu` drives one enable per byte lane and the data in the matching
+        lanes, so a store of one byte must not disturb the other three in the
+        word. Writing whole words regardless makes every byte and halfword store
+        in a program silently corrupt its neighbours - and because the checks
+        read the neighbours back, that looks like a failing memory test rather
+        than a broken memory model.
+        """
+        if wstrb == 0xF:
+            self.write(addr, data)
+            return
+        old = self.cells.get(addr, 0)
+        for lane in range(4):
+            if wstrb & (1 << lane):
+                mask = 0xFF << (8 * lane)
+                old = (old & ~mask) | (data & mask)
+        self.write(addr, old)
+
+    def load_binary(self, path, base=0x0):
+        """Load a flat little-endian binary, four bytes per word.
+
+        The simulator's memory is word-addressed, so this repacks a byte image
+        rather than storing it directly. `objcopy -O binary` emits exactly one
+        contiguous run, which is what makes this sufficient for a linker script
+        with no gaps.
+        """
+        with open(path, "rb") as fh:
+            data = fh.read()
+        if len(data) % 4:
+            data += b"\0" * (4 - len(data) % 4)
+        for off in range(0, len(data), 4):
+            self.cells[base + off] = int.from_bytes(data[off:off + 4], "little")
+        return base + len(data)
+
+    @property
+    def result(self):
+        """Decode a `tohost` write into (passed, value), or None if none yet.
+
+        Bit 0 of the stored word is the pass flag and the rest is the value,
+        which for our own `crt0` is the number of the first failing check.
+        """
+        if self.tohost is None:
+            return None
+        raw = self.tohost & 0xFFFFFFFF
+        return (bool(raw & 1), raw >> 1)
 
     async def serve(self):
         """Answer the fetch pair and the load/store pair with one cycle of latency.
@@ -174,6 +270,7 @@ class Memory:
         d = self.dut
         d.if_rsp_valid.value = 0
         d.mem_rsp_valid.value = 0
+        self.tohost = None
         pending = None
         await FallingEdge(d.clk)
         while True:
@@ -194,7 +291,8 @@ class Memory:
             if pending is None:
                 if d.mem_req_valid.value:
                     queued = ("mem", int(d.mem_req_addr.value),
-                              int(d.mem_req_wdata.value), int(d.mem_req_we.value))
+                              int(d.mem_req_wdata.value), int(d.mem_req_we.value),
+                              int(d.mem_req_wstrb.value))
                 elif d.if_req_valid.value:
                     queued = ("fetch", self.read(int(d.if_req_addr.value)))
 
@@ -207,9 +305,11 @@ class Memory:
                 d.if_rsp_valid.value = 1
                 d.mem_rsp_valid.value = 0
             else:
-                _, addr, data, we = pending
+                _, addr, data, we, wstrb = pending
                 if we:
-                    self.write(addr, data)
+                    self.write_strobes(addr, data, wstrb)
+                    if addr == TOHOST:
+                        self.tohost = data
                 else:
                     d.mem_rsp_rdata.value = self.read(addr)
                 d.mem_rsp_valid.value = 1
@@ -446,3 +546,36 @@ async def test_x0_write_is_discarded_end_to_end(dut):
     ]
     mem = await start(dut, program)
     await run_and_check(dut, mem, {0x40: 0})
+
+
+@cocotb.test()
+async def test_compressed_jal_links_pc_plus_two(dut):
+    """A compressed `c.jal` must link PC+2, not PC+4.
+
+    The instruction at 0x0 is a `c.jal` of length 2 bytes; its target is 0x4.
+    The link register must therefore hold 0x2, the address of the *next*
+    instruction. Linking PC+4 would silently skip a byte and return to the
+    middle of the compressed stream.
+    """
+    program = [
+        c_jal(4) | (0x0001 << 16),  # 0x0: c.jal 0x4; 0x2: c.nop (squashed)
+        sw(1, X0, 0x40),            # 0x4: store the link register
+    ]
+    mem = await start(dut, program)
+    await run_and_check(dut, mem, {0x40: 0x2})
+
+
+@cocotb.test()
+async def test_32_bit_jal_links_pc_plus_four(dut):
+    """A 32-bit `jal` must still link PC+4.
+
+    The companion to the compressed test: the length-aware link must not have
+    made every jump link PC+2.
+    """
+    program = [
+        jal(1, 0x8),       # 0x0: jal x1, 0x8  -> target 0x8, link 0x4
+        addi(6, X0, 0xBAD),  # 0x4: squashed
+        sw(1, X0, 0x40),   # 0x8: store the link register
+    ]
+    mem = await start(dut, program)
+    await run_and_check(dut, mem, {0x40: 0x4})

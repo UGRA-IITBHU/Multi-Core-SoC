@@ -74,6 +74,7 @@ module core (
   wire [`p_PC_W-1:0]    if_id_pred_pc     = if_id_q[p_IF_ID__PRED_PC_LSB    +: p_IF_ID__PRED_PC_W];
   wire [`p_INSTR_W-1:0] if_id_instr       = if_id_q[p_IF_ID__INSTR_LSB      +: p_IF_ID__INSTR_W];
   wire                  if_id_valid       = if_id_q[p_IF_ID__VALID_LSB      +: p_IF_ID__VALID_W];
+  wire [2:0]            if_id_instr_len   = if_id_q[p_IF_ID__INSTR_LEN_LSB  +: p_IF_ID__INSTR_LEN_W];
 
   wire                  id_ex_reg_write   = id_ex_q[p_ID_EX__REG_WRITE_LSB   +: p_ID_EX__REG_WRITE_W];
   wire                  id_ex_mem_unsigned= id_ex_q[p_ID_EX__MEM_UNSIGNED_LSB+: p_ID_EX__MEM_UNSIGNED_W];
@@ -100,6 +101,7 @@ module core (
   wire                  id_ex_is_illegal  = id_ex_q[p_ID_EX__IS_ILLEGAL_LSB  +: p_ID_EX__IS_ILLEGAL_W];
   wire                  id_ex_uses_rd     = id_ex_q[p_ID_EX__USES_RD_LSB     +: p_ID_EX__USES_RD_W];
   wire                  id_ex_valid       = id_ex_q[p_ID_EX__VALID_LSB       +: p_ID_EX__VALID_W];
+  wire [2:0]            id_ex_instr_len   = id_ex_q[p_ID_EX__INSTR_LEN_LSB   +: p_ID_EX__INSTR_LEN_W];
 
   wire                  em_reg_write      = ex_mem_q[p_EX_MEM__REG_WRITE_LSB  +: p_EX_MEM__REG_WRITE_W];
   wire                  em_mem_write      = ex_mem_q[p_EX_MEM__MEM_WRITE_LSB  +: p_EX_MEM__MEM_WRITE_W];
@@ -111,6 +113,7 @@ module core (
   wire [`p_XLEN-1:0]     em_alu_result     = ex_mem_q[p_EX_MEM__ALU_RESULT_LSB +: p_EX_MEM__ALU_RESULT_W];
   wire [`p_PC_W-1:0]     em_pc             = ex_mem_q[p_EX_MEM__PC_LSB         +: p_EX_MEM__PC_W];
   wire                  em_valid          = ex_mem_q[p_EX_MEM__VALID_LSB     +: p_EX_MEM__VALID_W];
+  wire [2:0]            em_instr_len      = ex_mem_q[p_EX_MEM__INSTR_LEN_LSB +: p_EX_MEM__INSTR_LEN_W];
 
   wire                  mw_reg_write      = mem_wb_q[p_MEM_WB__REG_WRITE_LSB +: p_MEM_WB__REG_WRITE_W];
   wire [`p_REG_ADDR_W-1:0] mw_rd_addr      = mem_wb_q[p_MEM_WB__RD_ADDR_LSB  +: p_MEM_WB__RD_ADDR_W];
@@ -536,6 +539,7 @@ module core (
     if_id_d[p_IF_ID__PRED_PC_LSB    +: p_IF_ID__PRED_PC_W]    = if_pred_pc;
     if_id_d[p_IF_ID__INSTR_LSB      +: p_IF_ID__INSTR_W]      = if_instr;
     if_id_d[p_IF_ID__VALID_LSB      +: p_IF_ID__VALID_W]      = accept;
+    if_id_d[p_IF_ID__INSTR_LEN_LSB  +: p_IF_ID__INSTR_LEN_W]  = if_instr_len;
   end
 
   always @(*) begin
@@ -565,6 +569,7 @@ module core (
     id_ex_d[p_ID_EX__IS_ILLEGAL_LSB  +: p_ID_EX__IS_ILLEGAL_W]   = d_is_illegal;
     id_ex_d[p_ID_EX__USES_RD_LSB     +: p_ID_EX__USES_RD_W]      = d_uses_rd;
     id_ex_d[p_ID_EX__VALID_LSB       +: p_ID_EX__VALID_W]        = if_id_valid & ~flush & ~hazard_id_stall;
+    id_ex_d[p_ID_EX__INSTR_LEN_LSB   +: p_ID_EX__INSTR_LEN_W]    = if_id_instr_len;
   end
 
   always @(*) begin
@@ -586,6 +591,8 @@ module core (
     // Validity is carried down the chain, not invented here: an instruction
     // only reaches MEM if it was real in EX.
     ex_mem_d[p_EX_MEM__VALID_LSB      +: p_EX_MEM__VALID_W]      = id_ex_valid;
+    // Length rides with the PC so WB can link the *next* instruction's address.
+    ex_mem_d[p_EX_MEM__INSTR_LEN_LSB  +: p_EX_MEM__INSTR_LEN_W]  = id_ex_instr_len;
   end
 
   // The writeback value for the instruction currently in EX/MEM.
@@ -602,12 +609,14 @@ module core (
   // The selection is repeated here rather than taken from `mem_stage` because
   // the frozen port list exposes only the registered result; adding an
   // unregistered output would be a contract change. The encoding matches
-  // `mem_stage`: 0 = ALU, 1 = memory, 2 = PC + 4.
+  // `mem_stage`: 0 = ALU, 1 = memory, 2 = PC + instruction length. The link is
+  // `pc + 4` for a 32-bit JAL and `pc + 2` for a compressed `c.jal`, so the
+  // length travels with the PC in EX/MEM instead of a hard-coded 4.
   reg [`p_XLEN-1:0] wb_value;
   always @(*) begin
     case (em_wb_sel)
       2'd1:    wb_value = mem_rsp_rdata;
-      2'd2:    wb_value = em_pc + 32'd4;
+      2'd2:    wb_value = em_pc + {29'b0, em_instr_len};
       default: wb_value = em_alu_result;
     endcase
   end

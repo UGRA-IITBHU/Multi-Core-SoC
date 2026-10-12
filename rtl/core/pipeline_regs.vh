@@ -34,7 +34,7 @@
 // ============================================================================
 
 // ===========================================================================
-// IF/ID bundle  (width 98)
+// IF/ID bundle  (width 101)
 //
 // Produced by `core` from `pc_gen` + `if_stage`, consumed by decode / regfile /
 // imm_gen.  `valid` is bit 0 of `core`'s `stage_valid` output.
@@ -49,10 +49,14 @@ localparam integer p_IF_ID__INSTR_LSB      = 65;
 localparam integer p_IF_ID__INSTR_W        = 32;
 localparam integer p_IF_ID__VALID_LSB      = 97;
 localparam integer p_IF_ID__VALID_W        = 1;
-localparam integer p_IF_ID_W               = 98;
+// Appended above VALID (Phase 2, compressed): the fetched instruction's length
+// in bytes, 2 or 4.  3 bits, not 2: the value 4 needs bit 2.
+localparam integer p_IF_ID__INSTR_LEN_LSB  = 98;
+localparam integer p_IF_ID__INSTR_LEN_W    = 3;
+localparam integer p_IF_ID_W               = 101;
 
 // ===========================================================================
-// ID/EX bundle  (width 171)
+// ID/EX bundle  (width 174)
 //
 // Produced by `core` from `decode` control fields, `regfile` read data and
 // `imm_gen` output.  Consumed by `ex_stage`, `forwarding`, `hazard_unit`.
@@ -117,10 +121,13 @@ localparam integer p_ID_EX__USES_RD_W      = 1;
 
 localparam integer p_ID_EX__VALID_LSB      = 170;
 localparam integer p_ID_EX__VALID_W        = 1;
-localparam integer p_ID_EX_W               = 171;
+// Appended above VALID (Phase 2, compressed): instruction length in bytes.
+localparam integer p_ID_EX__INSTR_LEN_LSB  = 171;
+localparam integer p_ID_EX__INSTR_LEN_W    = 3;
+localparam integer p_ID_EX_W               = 174;
 
 // ===========================================================================
-// EX/MEM bundle  (width 109)
+// EX/MEM bundle  (width 112)
 //
 // Produced by `core` from `ex_stage` and `lsu` outputs.  Consumed by
 // `mem_stage`, and by `forwarding` / `hazard_unit` as the MEM-stage producer.
@@ -146,7 +153,11 @@ localparam integer p_EX_MEM__PC_LSB          = 76;
 localparam integer p_EX_MEM__PC_W            = 32;
 localparam integer p_EX_MEM__VALID_LSB       = 108;
 localparam integer p_EX_MEM__VALID_W         = 1;
-localparam integer p_EX_MEM_W                = 109;
+// Appended above VALID (Phase 2, compressed): instruction length in bytes, so
+// `WB_SEL == PC4` can link the address of the *next* instruction.
+localparam integer p_EX_MEM__INSTR_LEN_LSB   = 109;
+localparam integer p_EX_MEM__INSTR_LEN_W     = 3;
+localparam integer p_EX_MEM_W                = 112;
 
 // ===========================================================================
 // MEM/WB bundle  (width 71)
