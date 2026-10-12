@@ -467,22 +467,37 @@ async def test_a_jump_to_itself_still_redirects(dut):
 
 
 @cocotb.test()
-async def test_a_misaligned_jal_target_is_flagged(dut):
-    """Phase 1 has no compressed instructions, so bit 1 set is misaligned.
+async def test_halfword_aligned_target_is_not_misaligned(dut):
+    """With 2-byte instructions, bit 1 set is a legal address bit.
 
-    J-type immediates always have bit 0 at 0, so the alignment test reduces to
-    bit 1 - and `ex_target_misaligned` must be exactly that test, not "the
-    target is odd", which a J-type target can never be.
+    J-type immediates always have bit 0 at 0, so 2, 6, 0xA and 0xFFFFFFFE all
+    describe 2-byte-aligned targets under the compressed ISA and must not be
+    flagged.
     """
-    for imm, want in ((0x00000000, 0), (0x00000004, 0), (0x00000008, 0),
-                      (0x0000000C, 0), (0x00000002, 1), (0x00000006, 1),
-                      (0x0000000A, 1), (0xFFFFFFFE, 1)):
+    for imm in (0x00000000, 0x00000002, 0x00000004, 0x00000006,
+                0x00000008, 0x0000000A, 0xFFFFFFFE):
         await drive(dut, id_pc=0x00001000, id_imm=imm, id_op1_sel=OP1_PC,
                     id_op2_sel=OP2_IMM, id_is_jal=1, id_wb_sel=WB_PC4)
-        assert int(dut.ex_target_misaligned.value) == want, (
-            "JAL to %08x (imm %08x): target_misaligned is %d, expected %d"
-            % ((0x00001000 + imm) & MASK, imm,
-               int(dut.ex_target_misaligned.value), want)
+        assert int(dut.ex_target_misaligned.value) == 0, (
+            "JAL to %08x (imm %08x) was flagged misaligned; bit 1 is not a "
+            "misalignment with compressed instructions"
+            % ((0x00001000 + imm) & MASK, imm)
+        )
+
+
+@cocotb.test()
+async def test_odd_target_is_misaligned(dut):
+    """A target with bit 0 set is not 2-byte aligned and is flagged.
+
+    No real J- or B-type immediate sets bit 0; the datapath is driven directly
+    so the verdict is tested against the *address*, not against the immediate.
+    """
+    for imm in (0x00000001, 0x00000003, 0x0000000B):
+        await drive(dut, id_pc=0x00001000, id_imm=imm, id_op1_sel=OP1_PC,
+                    id_op2_sel=OP2_IMM, id_is_jal=1, id_wb_sel=WB_PC4)
+        assert int(dut.ex_target_misaligned.value) == 1, (
+            "JAL to %08x (imm %08x) is odd and must be flagged"
+            % ((0x00001000 + imm) & MASK, imm)
         )
 
 
@@ -490,22 +505,21 @@ async def test_a_misaligned_jal_target_is_flagged(dut):
 async def test_a_misaligned_branch_target_is_flagged_only_when_the_branch_is_taken(dut):
     """A not-taken branch's target is never fetched, so it is never misaligned.
 
-    This is decision (1) above.  B-type immediates always have bit 0 at 0, so a
-    displacement of 2 is expressible and legal, and a program containing
-    `beq x0, x0, +2` must run: the branch is taken, the target is misaligned and
-    the verdict is raised - but `beq x1, x1, +2` with x1 != x0 must not raise
-    anything at all, because that target is never used.
+    This is decision (1) above, tested with an odd target (bit 0 set).  A
+    program with `beq x0, x0, +3`-shaped bits must flag when the branch is taken
+    - but `beq x1, x1, ...` with x1 != x0 must not raise anything at all,
+    because that target is never used.
     """
-    # Taken: x0 == x0 always, so BEQ is taken and the +2 target is flagged.
-    await branch(dut, F3_BEQ, 0x00000000, 0x00000000, imm=0x00000002)
+    # Taken: x0 == x0 always, so BEQ is taken and the odd target is flagged.
+    await branch(dut, F3_BEQ, 0x00000000, 0x00000000, imm=0x00000003)
     assert int(dut.ex_redirect_valid.value) == 1, "beq x0,x0 must be taken"
-    assert int(dut.ex_redirect_pc.value) == 0x00001002
+    assert int(dut.ex_redirect_pc.value) == 0x00001003
     assert int(dut.ex_target_misaligned.value) == 1, (
-        "a taken branch to a +2 target must report misalignment"
+        "a taken branch to an odd target must report misalignment"
     )
 
     # Not taken, same displacement: nothing is reported.
-    await branch(dut, F3_BEQ, 0x00000001, 0x00000002, imm=0x00000002)
+    await branch(dut, F3_BEQ, 0x00000001, 0x00000002, imm=0x00000003)
     assert int(dut.ex_redirect_valid.value) == 0
     assert int(dut.ex_target_misaligned.value) == 0, (
         "a not-taken branch reported misalignment for a target it never uses"
@@ -522,12 +536,12 @@ async def test_misalignment_does_not_suppress_the_redirect(dut):
     leave `core` with a condition it can neither trap on nor forward, because
     the information would have been thrown away one stage too early.
     """
-    await branch(dut, F3_BEQ, 0x00000000, 0x00000000, imm=0x00000002)
+    await branch(dut, F3_BEQ, 0x00000000, 0x00000000, imm=0x00000003)
     assert int(dut.ex_target_misaligned.value) == 1, "precondition: misaligned"
     assert int(dut.ex_redirect_valid.value) == 1, (
         "the redirect was suppressed by the misalignment verdict"
     )
-    assert int(dut.ex_redirect_pc.value) == 0x00001002, (
+    assert int(dut.ex_redirect_pc.value) == 0x00001003, (
         "ex_redirect_pc must still carry the computed target, not the aligned "
         "value and not zero: got %08x" % int(dut.ex_redirect_pc.value)
     )
@@ -535,10 +549,10 @@ async def test_misalignment_does_not_suppress_the_redirect(dut):
 
 @cocotb.test()
 async def test_a_jalr_target_is_never_misaligned_by_the_bit_it_clears(dut):
-    """JALR clears bit 0, and bit 0 is not part of the alignment test.
+    """JALR clears bit 0, which is exactly the bit the alignment test uses.
 
-    A target of ...01 and a target of ...00 are the same destination for JALR,
-    so they must produce the same verdict.  Testing the verdict against the
+    So a JALR target is always 2-byte aligned and the verdict is always 0, even
+    when the raw `rs1 + imm` sum has bit 0 set.  Testing the verdict against the
     un-cleared sum is the bug this catches.
     """
     for rs1, imm in ((0x00001001, 0x00000000),
@@ -549,10 +563,10 @@ async def test_a_jalr_target_is_never_misaligned_by_the_bit_it_clears(dut):
                     id_is_jalr=1, id_uses_rs1=1, ex_rs1_data=rs1)
         want = ((rs1 + imm) & MASK) & ~1
         assert int(dut.ex_redirect_pc.value) == want
-        assert int(dut.ex_target_misaligned.value) == ((want >> 1) & 1), (
-            "JALR rs1=%08x imm=%08x: target %08x has bit 1 = %d, so "
+        assert int(dut.ex_target_misaligned.value) == (want & 1), (
+            "JALR rs1=%08x imm=%08x: target %08x has bit 0 = %d, so "
             "target_misaligned must be %d"
-            % (rs1, imm, want, (want >> 1) & 1, (want >> 1) & 1)
+            % (rs1, imm, want, want & 1, want & 1)
         )
 
 

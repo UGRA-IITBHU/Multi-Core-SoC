@@ -360,17 +360,18 @@ Combinational.
 | `ex_mem_unsigned` | out | 1 | load is unsigned |
 | `ex_redirect_valid` | out | 1 | fetch must redirect this cycle |
 | `ex_redirect_pc` | out | 32 | redirect target |
-| `ex_target_misaligned` | out | 1 | branch/JAL/JALR target is not 4-byte aligned |
+| `ex_target_misaligned` | out | 1 | branch/JAL/JALR target is not 2-byte aligned |
 
 **Guarantee to `core`, `lsu` and `pc_gen`.** `ex_redirect_valid` is the only
 redirect source in the pipeline, resolved in this stage in the cycle the branch
 or jump is in EX, so `pc_gen` has exactly one funnel to obey.
 
 `ex_target_misaligned` reports a branch, JAL or JALR whose computed target is
-not 4-byte aligned. It is a **verdict, not a redirect**: `ex_redirect_pc` still
-carries the computed target, and it is `core`'s job to decide what an
-instruction-misaligned target means. It is unrelated to `lsu.data_misaligned`,
-which is the data-address condition.
+not 2-byte aligned (bit 0 set). Because the ISA is `rv32imac` the instruction
+address need only be even, so bit 1 is a legal address bit. It is a **verdict,
+not a redirect**: `ex_redirect_pc` still carries the computed target, and it is
+`core`'s job to decide what an instruction-misaligned target means. It is
+unrelated to `lsu.data_misaligned`, which is the data-address condition.
 
 Branch and jump resolution needs nothing beyond this port list:
 `id_is_branch` / `id_is_jal` / `id_is_jalr` identify the instruction class,

@@ -40,7 +40,7 @@
 //   ex_mem_unsigned   output 1   load is unsigned
 //   ex_redirect_valid output 1   fetch must redirect this cycle
 //   ex_redirect_pc    output 32  redirect target
-//   ex_target_misaligned output 1 branch/JAL/JALR target is not 4-byte aligned
+//   ex_target_misaligned output 1 branch/JAL/JALR target is not 2-byte aligned
 //
 // Guarantee to `core`, `lsu` and `pc_gen`: `ex_redirect_valid` is the only
 // redirect source in the pipeline, and it is resolved in this stage in the
@@ -323,10 +323,9 @@ module ex_stage (
   // --------------------------------------------------------------------------
   // Instruction-address misalignment.
   //
-  // Phase 1 has no compressed instructions, so the instruction-address
-  // alignment is 32 bits and a target is aligned exactly when bit 1 is low.
-  // Bit 0 needs no test: B- and J-type immediates always have it at 0, and
-  // JALR's target has just had it cleared.
+  // Phase 2 supports compressed (16-bit) instructions, so the instruction
+  // address is only required to be 2-byte aligned: a target is misaligned
+  // exactly when bit 0 is set.  Bit 1 is a legal address bit now.
   //
   // The verdict is raised only when a redirect is actually being generated.
   // A not-taken branch never fetches its target, so its displacement is not an
@@ -343,7 +342,7 @@ module ex_stage (
   // --------------------------------------------------------------------------
   reg target_misaligned_r;
   always @(*) begin
-    if (redirect_valid_r) target_misaligned_r = redirect_pc_r[1];
+    if (redirect_valid_r) target_misaligned_r = redirect_pc_r[0];
     else                  target_misaligned_r = 1'b0;
   end
 
