@@ -370,12 +370,99 @@ module decode (
     end
   endfunction
 
+  function [`p_INSTR_W-1:0] rvc_q1;
+    /* verilator lint_off UNUSEDSIGNAL */
+    // h[1:0] is the quadrant selector, spent in `rvc_expand` before dispatch.
+    input [15:0] h;
+    /* verilator lint_on UNUSEDSIGNAL */
+    reg [4:0]  rd;
+    reg [4:0]  rd_p;
+    reg [4:0]  rs1_p;
+    reg [4:0]  rs2_p;
+    reg [11:0] imm;
+    // jimm/bimm carry only bits [20:1] / [12:1]: jump and branch targets are
+    // 2-byte aligned, so bit 0 is structurally zero and is not stored.
+    reg [20:1] jimm;
+    reg [12:1] bimm;
+    begin
+      rd     = h[11:7];
+      rd_p   = {2'b01, h[9:7]};
+      rs1_p  = {2'b01, h[9:7]};
+      rs2_p  = {2'b01, h[4:2]};
+      // 6-bit signed immediate {h[12], h[6:2]}, sign-extended to 12 bits.
+      imm    = {{6{h[12]}}, h[12], h[6:2]};
+      // C.J offset, placed in the 32-bit J-type layout (sign bit is h[12]).
+      jimm   = {{9{h[12]}}, h[12], h[8], h[10:9], h[6], h[7], h[2], h[11],
+                h[5:3]};
+      // C.BEQZ/C.BNEZ offset, placed in the 32-bit B-type layout.
+      bimm   = {{4{h[12]}}, h[12], h[6:5], h[2], h[11:10], h[4:3]};
+      rvc_q1 = 32'h0000_0000;
+      case (h[15:13])
+        3'b000: begin  // C.NOP / C.ADDI -> addi rd, rd, imm
+          rvc_q1 = {imm, rd, 3'b000, rd, OP_OP_IMM};
+        end
+        3'b001: begin  // C.JAL -> jal x1, offset
+          rvc_q1 = {jimm[20], jimm[10:1], jimm[11], jimm[19:12], 5'd1, OP_JAL};
+        end
+        3'b010: begin  // C.LI -> addi rd, x0, imm
+          rvc_q1 = {imm, 5'd0, 3'b000, rd, OP_OP_IMM};
+        end
+        3'b011: begin
+          if (rd == 5'd2) begin  // C.ADDI16SP -> addi x2, x2, nzimm
+            imm = {{2{h[12]}}, h[12], h[4:3], h[5], h[2], h[6], 4'b0000};
+            if (imm != 12'b0)
+              rvc_q1 = {imm, 5'd2, 3'b000, 5'd2, OP_OP_IMM};
+          end
+          else if (rd != 5'd0) begin  // C.LUI -> lui rd, nzimm (nzimm != 0)
+            if (h[12] || (h[6:2] != 5'b0))
+              rvc_q1 = {{15{h[12]}}, h[6:2], rd, OP_LUI};
+          end
+          // rd == 0 and rd == 2 with nzimm == 0 are reserved: stay 0.
+        end
+        3'b100: begin
+          case (h[12:10])
+            3'b000:  // C.SRLI -> srli rd', rd', shamt
+              rvc_q1 = {7'b0000000, h[6:2], rs1_p, 3'b101, rd_p, OP_OP_IMM};
+            3'b001:  // C.SRAI -> srai rd', rd', shamt
+              rvc_q1 = {7'b0100000, h[6:2], rs1_p, 3'b101, rd_p, OP_OP_IMM};
+            3'b010:  // C.ANDI -> andi rd', rd', imm
+              rvc_q1 = {imm, rs1_p, 3'b111, rd_p, OP_OP_IMM};
+            3'b011: begin  // C.SUB/C.XOR/C.OR/C.AND, selected by h[6:5]
+              case (h[6:5])
+                2'b00: rvc_q1 = {7'b0100000, rs2_p, rs1_p, 3'b000, rd_p, OP_OP};
+                2'b01: rvc_q1 = {7'b0000000, rs2_p, rs1_p, 3'b100, rd_p, OP_OP};
+                2'b10: rvc_q1 = {7'b0000000, rs2_p, rs1_p, 3'b110, rd_p, OP_OP};
+                2'b11: rvc_q1 = {7'b0000000, rs2_p, rs1_p, 3'b111, rd_p, OP_OP};
+              endcase
+            end
+            default: begin
+              // h[12:10] = 1xx is reserved in RV32 (the C.JR/C.MV and
+              // C.EBREAK/C.JALR/C.ADD groups live in quadrant 2).
+            end
+          endcase
+        end
+        3'b101: begin  // C.J -> jal x0, offset
+          rvc_q1 = {jimm[20], jimm[10:1], jimm[11], jimm[19:12], 5'd0, OP_JAL};
+        end
+        3'b110: begin  // C.BEQZ -> beq rs1', x0, offset
+          rvc_q1 = {bimm[12], bimm[10:5], 5'd0, rs1_p, 3'b000, bimm[4:1],
+                    bimm[11], OP_BRANCH};
+        end
+        3'b111: begin  // C.BNEZ -> bne rs1', x0, offset
+          rvc_q1 = {bimm[12], bimm[10:5], 5'd0, rs1_p, 3'b001, bimm[4:1],
+                    bimm[11], OP_BRANCH};
+        end
+      endcase
+    end
+  endfunction
+
   function [`p_INSTR_W-1:0] rvc_expand;
     input [15:0] h;
     begin
       case (h[1:0])
         2'b00:   rvc_expand = rvc_q0(h);
-        default: rvc_expand = 32'h0000_0000;  // quadrants 1 and 2 yet
+        2'b01:   rvc_expand = rvc_q1(h);
+        default: rvc_expand = 32'h0000_0000;  // quadrant 2 not yet expanded
       endcase
     end
   endfunction

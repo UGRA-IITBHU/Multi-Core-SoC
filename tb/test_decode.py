@@ -562,6 +562,10 @@ async def test_unknown_opcode_does_not_produce_an_add(dut):
     Stated separately from the all-ones case because this is the property the
     whole default-to-illegal design exists to provide, and it should hold for
     *every* unimplemented encoding rather than for one memorable constant.
+
+    Only opcodes that end in `11` are 32-bit opcodes: with `instr[1:0] != 11`
+    the low bits select a compressed quadrant instead, so those words are not
+    "unknown 32-bit opcodes" and are covered by the C-extension tests.
     """
     # Every 7-bit opcode that is not one of the eleven this core implements.
     implemented = {
@@ -569,7 +573,7 @@ async def test_unknown_opcode_does_not_produce_an_add(dut):
         OP_LUI, OP_BRANCH, OP_JALR, OP_JAL, OP_SYSTEM,
     }
     for opcode in range(128):
-        if opcode in implemented:
+        if opcode in implemented or opcode & 0b11 != 0b11:
             continue
         word = (0xABCDEF01 & ~0x7F) | opcode
         got = await decode(dut, word)
@@ -759,6 +763,18 @@ def eff_imm_s(eff):
     return v - 0x1000 if v & 0x800 else v
 
 
+def eff_imm_j(eff):
+    v = (((eff >> 31) & 1) << 20) | (((eff >> 21) & 0x3FF) << 1)
+    v |= (((eff >> 20) & 1) << 11) | (((eff >> 12) & 0xFF) << 12)
+    return v - (1 << 21) if v & (1 << 20) else v
+
+
+def eff_imm_b(eff):
+    v = (((eff >> 31) & 1) << 12) | (((eff >> 25) & 0x3F) << 5)
+    v |= (((eff >> 8) & 0xF) << 1) | (((eff >> 7) & 1) << 11)
+    return v - (1 << 13) if v & (1 << 12) else v
+
+
 async def expanded(dut, word):
     """Present one instruction word and read the post-expansion 32-bit word."""
     dut.instr.value = word
@@ -909,6 +925,192 @@ async def test_instructions_longer_than_32_bits_are_illegal(dut):
             await expect_illegal(dut, word, "over-long opcode %s" % format(opcode, "07b"))
             swept += 1
     assert swept == 4 * 8, "expected to sweep 4 over-long opcodes, swept %d" % swept
+
+
+# --- quadrant 1 ------------------------------------------------------------
+#
+# Every word below is the toolchain's own encoding, and every expected value is
+# the toolchain's own encoding of the equivalent 32-bit instruction (checked
+# with `riscv64-elf-objdump -D -b binary -m riscv:rv32`).
+
+C_NOP = 0x0001                 # c.nop
+C_ADDI_S0_M1 = 0x147D          # c.addi s0, -1
+C_LI_S1_5 = 0x4495             # c.li s1, 5
+C_LUI_S1_1 = 0x6485            # c.lui s1, 0x1
+C_ADDI16SP_SP_32 = 0x6105      # c.addi16sp sp, 32
+C_SRLI_S1_3 = 0x808D           # c.srli s1, 3
+C_SRAI_S1_3 = 0x848D           # c.srai s1, 3
+C_ANDI_S1_3 = 0x888D           # c.andi s1, 3
+C_SUB_S1_A0 = 0x8C89           # c.sub s1, a0
+C_XOR_S1_A0 = 0x8CA9           # c.xor s1, a0
+C_OR_S1_A0 = 0x8CC9            # c.or s1, a0
+C_AND_S1_A0 = 0x8CE9           # c.and s1, a0
+C_JAL_44 = 0x2035              # c.jal 44
+C_J_24 = 0xA821                # c.j 24
+C_BEQZ_S1_22 = 0xC899          # c.beqz s1, 22
+C_BNEZ_S1_20 = 0xE891          # c.bnez s1, 20
+
+
+@cocotb.test()
+async def test_c_nop_expands_to_inert_addi(dut):
+    """c.nop == `addi x0, x0, 0`.  rd is x0, so it has no architectural effect."""
+    eff = await expanded(dut, C_NOP)
+    assert eff == 0x00000013, "c.nop expanded to %08x, expected 0x00000013" % eff
+    assert eff_rd(eff) == 0, "c.nop must target x0: %08x" % eff
+    await expect_fields(dut, C_NOP, "c.nop", alu_op=ALU_ADD, op2_sel=OP2_IMM,
+                        imm_sel=IMM_I, uses_rs1=1, uses_rd=1, reg_write=1)
+
+
+@cocotb.test()
+async def test_c_addi_expands_to_addi_rd_rd(dut):
+    """c.addi rd, imm == `addi rd, rd, imm`, imm sign-extended."""
+    eff = await expanded(dut, C_ADDI_S0_M1)
+    assert eff == 0xFFF40413, "c.addi s0,-1 expanded to %08x, expected 0xFFF40413" % eff
+    assert (eff_opcode(eff), eff_rd(eff), eff_rs1(eff), eff_imm_i(eff)) == (
+        OP_OP_IMM, 8, 8, -1
+    ), "expanded word is not `addi x8, x8, -1`: %08x" % eff
+    await expect_fields(dut, C_ADDI_S0_M1, "c.addi s0,-1", alu_op=ALU_ADD,
+                        op2_sel=OP2_IMM, imm_sel=IMM_I, uses_rs1=1, uses_rd=1,
+                        reg_write=1)
+
+
+@cocotb.test()
+async def test_c_li_expands_to_addi_rd_x0(dut):
+    """c.li rd, imm == `addi rd, x0, imm`."""
+    eff = await expanded(dut, C_LI_S1_5)
+    assert eff == 0x00500493, "c.li s1,5 expanded to %08x, expected 0x00500493" % eff
+    assert (eff_opcode(eff), eff_rd(eff), eff_rs1(eff), eff_imm_i(eff)) == (
+        OP_OP_IMM, 9, 0, 5
+    ), "expanded word is not `addi x9, x0, 5`: %08x" % eff
+    await expect_fields(dut, C_LI_S1_5, "c.li s1,5", alu_op=ALU_ADD,
+                        op2_sel=OP2_IMM, imm_sel=IMM_I, uses_rd=1, reg_write=1)
+
+
+@cocotb.test()
+async def test_c_lui_expands_to_lui(dut):
+    """c.lui rd, nzimm == `lui rd, nzimm`, nzimm in imm[17:12]."""
+    eff = await expanded(dut, C_LUI_S1_1)
+    assert eff == 0x000014B7, "c.lui s1,0x1 expanded to %08x, expected 0x000014B7" % eff
+    assert eff_opcode(eff) == OP_LUI and eff_rd(eff) == 9, (
+        "expanded word is not `lui x9, 0x1`: %08x" % eff
+    )
+    await expect_fields(dut, C_LUI_S1_1, "c.lui s1,0x1", alu_op=ALU_ADD,
+                        op1_sel=OP1_ZERO, op2_sel=OP2_IMM, imm_sel=IMM_U,
+                        uses_rd=1, reg_write=1)
+
+
+@cocotb.test()
+async def test_c_addi16sp_expands_to_addi_sp(dut):
+    """c.addi16sp sp, nzimm == `addi sp, sp, nzimm` (a multiple of 16)."""
+    eff = await expanded(dut, C_ADDI16SP_SP_32)
+    assert eff == 0x02010113, "c.addi16sp sp,32 expanded to %08x, expected 0x02010113" % eff
+    assert (eff_opcode(eff), eff_rd(eff), eff_rs1(eff), eff_imm_i(eff)) == (
+        OP_OP_IMM, 2, 2, 32
+    ), "expanded word is not `addi x2, x2, 32`: %08x" % eff
+    await expect_fields(dut, C_ADDI16SP_SP_32, "c.addi16sp sp,32", alu_op=ALU_ADD,
+                        op2_sel=OP2_IMM, imm_sel=IMM_I, uses_rs1=1, uses_rd=1,
+                        reg_write=1)
+
+
+@cocotb.test()
+async def test_c_shift_and_andi_expand(dut):
+    """c.srli/c.srai/c.andi operate on rd' == rs1' (the primitive registers)."""
+    cases = [
+        (C_SRLI_S1_3, 0x0034D493, ALU_SRL, "c.srli s1,3"),
+        (C_SRAI_S1_3, 0x4034D493, ALU_SRA, "c.srai s1,3"),
+        (C_ANDI_S1_3, 0x0034F493, ALU_AND, "c.andi s1,3"),
+    ]
+    for word, want, alu, note in cases:
+        eff = await expanded(dut, word)
+        assert eff == want, "%s expanded to %08x, expected %08x" % (note, eff, want)
+        assert (eff_opcode(eff), eff_rs1(eff), eff_rd(eff)) == (
+            OP_OP_IMM, 9, 9
+        ), "%s did not expand to rd' == rs1' == x9: %08x" % (note, eff)
+        assert (eff >> 20) & 0x1F == 3, (
+            "%s did not expand with shamt/imm 3: %08x" % (note, eff)
+        )
+        await expect_fields(dut, word, note, alu_op=alu, op2_sel=OP2_IMM,
+                            imm_sel=IMM_I, uses_rs1=1, uses_rd=1, reg_write=1)
+
+
+@cocotb.test()
+async def test_c_register_alu_ops_expand(dut):
+    """c.sub/c.xor/c.or/c.and == the register forms on rd', rs1', rs2'."""
+    cases = [
+        (C_SUB_S1_A0, 0x40A484B3, ALU_SUB, "c.sub s1,a0"),
+        (C_XOR_S1_A0, 0x00A4C4B3, ALU_XOR, "c.xor s1,a0"),
+        (C_OR_S1_A0, 0x00A4E4B3, ALU_OR, "c.or s1,a0"),
+        (C_AND_S1_A0, 0x00A4F4B3, ALU_AND, "c.and s1,a0"),
+    ]
+    for word, want, alu, note in cases:
+        eff = await expanded(dut, word)
+        assert eff == want, "%s expanded to %08x, expected %08x" % (note, eff, want)
+        assert (eff_opcode(eff), eff_rd(eff), eff_rs1(eff), eff_rs2(eff)) == (
+            OP_OP, 9, 9, 10
+        ), "%s did not expand to rd'=rs1'=x9, rs2'=x10: %08x" % (note, eff)
+        await expect_fields(dut, word, note, alu_op=alu, op2_sel=OP2_RS2,
+                            uses_rs1=1, uses_rs2=1, uses_rd=1, reg_write=1)
+
+
+@cocotb.test()
+async def test_c_jal_expands_to_jal(dut):
+    """c.jal offset == `jal x1, offset`; the offset is the same branch target."""
+    eff = await expanded(dut, C_JAL_44)
+    assert eff == 0x02C000EF, "c.jal 44 expanded to %08x, expected 0x02C000EF" % eff
+    assert (eff_opcode(eff), eff_rd(eff), eff_imm_j(eff)) == (OP_JAL, 1, 44), (
+        "expanded word is not `jal x1, 44`: %08x" % eff
+    )
+    await expect_fields(dut, C_JAL_44, "c.jal 44", op1_sel=OP1_PC,
+                        op2_sel=OP2_IMM, imm_sel=IMM_J, is_jal=1, uses_rd=1,
+                        reg_write=1, wb_sel=WB_PC4)
+
+
+@cocotb.test()
+async def test_c_j_expands_to_jal_x0(dut):
+    """c.j offset == `jal x0, offset` (the link register is discarded)."""
+    eff = await expanded(dut, C_J_24)
+    assert eff == 0x0180006F, "c.j 24 expanded to %08x, expected 0x0180006F" % eff
+    assert (eff_opcode(eff), eff_rd(eff), eff_imm_j(eff)) == (OP_JAL, 0, 24), (
+        "expanded word is not `jal x0, 24`: %08x" % eff
+    )
+    await expect_fields(dut, C_J_24, "c.j 24", op1_sel=OP1_PC, op2_sel=OP2_IMM,
+                        imm_sel=IMM_J, is_jal=1, uses_rd=1, reg_write=1,
+                        wb_sel=WB_PC4)
+
+
+@cocotb.test()
+async def test_c_beqz_bnez_expand_to_branches(dut):
+    """c.beqz/c.bnez rs1' == `beq`/`bne rs1', x0` with the same offset."""
+    cases = [
+        (C_BEQZ_S1_22, 0x00048B63, 0b000, 22, "c.beqz s1,22"),
+        (C_BNEZ_S1_20, 0x00049A63, 0b001, 20, "c.bnez s1,20"),
+    ]
+    for word, want, f3, off, note in cases:
+        eff = await expanded(dut, word)
+        assert eff == want, "%s expanded to %08x, expected %08x" % (note, eff, want)
+        assert (eff_opcode(eff), eff_imm_b(eff), eff_rs1(eff), eff_rs2(eff)) == (
+            OP_BRANCH, off, 9, 0
+        ), "%s did not expand to a branch on x9 vs x0: %08x" % (note, eff)
+        await expect_fields(dut, word, note, alu_op=ALU_SUB, imm_sel=IMM_B,
+                            branch_funct3=f3, is_branch=1, uses_rs1=1,
+                            uses_rs2=1)
+
+
+@cocotb.test()
+async def test_quadrant1_zero_immediates_are_reserved(dut):
+    """c.addi16sp nzimm == 0 and c.lui nzimm == 0 are reserved, not nops."""
+    await expect_illegal(dut, 0x6101, "c.addi16sp sp, 0")
+    await expect_illegal(dut, 0x6401, "c.lui s0, 0")
+
+
+@cocotb.test()
+async def test_rv64_quadrant1_forms_are_illegal(dut):
+    """c.subw and friends live at h[12:10] == 111 and are RV64-only.
+
+    The same bit pattern in RV32 is reserved and must be illegal, not decoded as
+    the RV64 word-wide arithmetic.
+    """
+    await expect_illegal(dut, 0x9C89, "c.subw s1, a0")
 
 
 # ---------------------------------------------------------------------------
