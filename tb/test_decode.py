@@ -719,94 +719,196 @@ async def test_srai_needs_the_sra_funct7_in_op_imm(dut):
 
 
 # ---------------------------------------------------------------------------
-# The C extension - illegal in phase 1, phase 2 adds it
+# The C extension - expand, then decode
 # ---------------------------------------------------------------------------
+#
+# `decode` rewrites a 16-bit instruction into its canonical 32-bit equivalent
+# (the `instr_eff` output) and then runs the same 32-bit decode on it.  So a
+# test asserts two things: that `instr_eff` is exactly the word the assembler
+# would have produced for the equivalent 32-bit instruction, and that the
+# control bundle is what that word decodes to.
+#
+# `instr_eff` is read back as a whole 32-bit number and parsed by the helpers
+# below, so the expansion is checked field by field rather than only through
+# the control signals it happens to influence.
+
+
+def eff_rd(eff):
+    return (eff >> 7) & 0x1F
+
+
+def eff_rs1(eff):
+    return (eff >> 15) & 0x1F
+
+
+def eff_rs2(eff):
+    return (eff >> 20) & 0x1F
+
+
+def eff_opcode(eff):
+    return eff & 0x7F
+
+
+def eff_imm_i(eff):
+    v = (eff >> 20) & 0xFFF
+    return v - 0x1000 if v & 0x800 else v
+
+
+def eff_imm_s(eff):
+    v = (((eff >> 25) & 0x7F) << 5) | ((eff >> 7) & 0x1F)
+    return v - 0x1000 if v & 0x800 else v
+
+
+async def expanded(dut, word):
+    """Present one instruction word and read the post-expansion 32-bit word."""
+    dut.instr.value = word
+    await Timer(1, unit="ns")
+    return int(dut.instr_eff.value)
 
 
 @cocotb.test()
-async def test_compressed_encodings_are_illegal(dut):
-    """Every 16-bit instruction is illegal: phase 1 has no C extension.
+async def test_compressed_and_32_bit_words_are_distinguished_by_instr_1_0(dut):
+    """instr[1:0] != 2'b11 selects the expander; == 2'b11 selects the decoder.
 
-    A word with `instr[1:0] != 11` is a 16-bit instruction, and all sixteen
-    C-extension encodings have that shape.
-
-    An honest note on what this test can and cannot prove.  `instr[1:0]` is the
-    bottom of the opcode field, so a 16-bit word also has an opcode that no
-    implemented arm matches - which means these words come out illegal through
-    the opcode `default` even if the explicit length gate in `decode` were
-    deleted.  The gate is therefore redundant *in phase 1*, and this test passes
-    either way; deleting the gate is not caught here.
-
-    It is kept anyway, and the reason is phase 2.  When the C extension lands,
-    `decode` will start matching 16-bit opcodes, and `instr[1:0]` is exactly the
-    field that says whether the word is 16 or 32 bits wide.  Without the gate
-    checked *before* the opcode switch, a 16-bit instruction would be dispatched
-    on its upper bits as though it were a 32-bit one.  So the gate is insurance
-    against a future bug rather than a present one, and
-    test_length_gate_is_not_redundant_in_phase_two says so where a reader will
-    find it before phase 2 does.
+    Both words below are hard anchors: 0x4504 is `c.lw s1, 8(a0)` and 0x00C58533
+    is `add a0, a1, a2`, both taken from the toolchain's own disassembly.
     """
-    for low in (0b00, 0b01, 0b10):
-        for body in (0x0000, 0x4501, 0xFFFF0000):
-            word = (body & ~0x3) | low
-            await expect_illegal(dut, word, "16-bit encoding, instr[1:0]=%s" % bin(low))
-
-
-@cocotb.test()
-async def test_length_gate_is_not_redundant_in_phase_two(dut):
-    """No phase-1 opcode can be reached through a 16-bit or over-long word.
-
-    This is the property that makes the length gate currently redundant, stated
-    as an assertion so that it is checked rather than assumed - and so that if a
-    future phase *does* add an opcode whose low bits are not `11`, this test
-    fails and points at the gate that will then be load-bearing.
-
-    Concretely: every implemented opcode already has `instr[1:0] == 11` and
-    `instr[4:2] != 111`.  Phase 2's C extension is what changes that, and the
-    gate exists for when it does.
-    """
-    implemented = (
-        OP_LOAD, OP_MISC_MEM, OP_OP_IMM, OP_AUIPC, OP_STORE, OP_OP,
-        OP_LUI, OP_BRANCH, OP_JALR, OP_JAL, OP_SYSTEM,
+    got = await decode(dut, 0x4504)          # c.lw x9, 8(x10)
+    assert got["mem_read"] == 1, (
+        "c.lw must decode as a load, not illegal: %s" % got
     )
-    for opcode in implemented:
-        assert opcode & 0b011 == 0b011, (
-            "implemented opcode %s has instr[1:0] != 11, so it can be reached "
-            "by a 16-bit word and the length gate is now load-bearing"
-            % format(opcode, "07b")
-        )
-        assert (opcode >> 2) & 0b111 != 0b111, (
-            "implemented opcode %s has instr[4:2] == 111, so it can be reached "
-            "by an over-long word and the length gate is now load-bearing"
-            % format(opcode, "07b")
-        )
+    got = await decode(dut, 0x00C58533)      # add a0, a1, a2
+    assert got["alu_op"] == ALU_ADD, "a 32-bit add must still decode: %s" % got
 
-    # And behaviourally: a word that is a *legal* instruction in every bit but
-    # the length field must still be illegal, because the length field is not
-    # negotiable.
+
+@cocotb.test()
+async def test_over_32_bit_forms_are_illegal(dut):
+    """A word with instr[4:2] == 111 is longer than 32 bits and is illegal.
+
+    The 16-bit length gate (`instr[1:0] != 11`) is now the expander *selector*,
+    not an illegal verdict, so the over-32-bit gate is the only length check
+    still rejecting a word outright.  This is the load-bearing half of the
+    phase-1 test of the same name.
+    """
     legal = ADD  # a plain, fully legal `add x7, x5, x6`
-    await expect_illegal(dut, legal & ~0b011, "ADD with instr[1:0] cleared")
     await expect_illegal(dut, (legal & ~0b0011100) | 0b111 << 2, "ADD marked over-long")
+
+
+# --- quadrant 0 ------------------------------------------------------------
+#
+# h[15:13]: 000 C.ADDI4SPN, 010 C.LW, 011 C.LD (RV32 illegal),
+#           110 C.SW, 111 C.SD (RV32 illegal).  All the words below are the
+#           toolchain's own encodings.
+
+C_ADDI4SPN_S0_SP_16 = 0x0800   # c.addi4spn s0, sp, 16
+C_LW_S1_8_A0 = 0x4504          # c.lw s1, 8(a0)
+C_SW_S1_8_A0 = 0xC504          # c.sw s1, 8(a0)
+
+
+@cocotb.test()
+async def test_c_addi4spn_expands_to_addi_sp(dut):
+    """c.addi4spn rd', nzuimm == `addi rd', x2, nzuimm`.
+
+    rd' is x8 (`s0`), rs1 is x2, and the addi immediate is 16, exactly as the
+    assembler encodes `addi s0, sp, 16` -> 0x01010413.
+    """
+    word = C_ADDI4SPN_S0_SP_16
+    eff = await expanded(dut, word)
+    assert eff == 0x01010413, (
+        "c.addi4spn s0,sp,16 expanded to %08x, expected addi s0,sp,16 (0x01010413)"
+        % eff
+    )
+    assert (eff_opcode(eff), eff_rd(eff), eff_rs1(eff), eff_imm_i(eff)) == (
+        OP_OP_IMM, 8, 2, 16
+    ), "expanded word is not `addi x8, x2, 16`: %08x" % eff
+    await expect_fields(dut, word, "c.addi4spn s0,sp,16",
+                        alu_op=ALU_ADD, op1_sel=OP1_RS1, op2_sel=OP2_IMM,
+                        imm_sel=IMM_I, uses_rs1=1, uses_rd=1, reg_write=1)
+
+
+@cocotb.test()
+async def test_c_lw_expands_to_lw(dut):
+    """c.lw rd', offset(rs1') == `lw rd', offset(rs1')`.
+
+    rd' is x9 (`s1`), rs1' is x10 (`a0`), offset 8; the assembler's equivalent
+    `lw s1, 8(a0)` is 0x00852483.
+    """
+    word = C_LW_S1_8_A0
+    eff = await expanded(dut, word)
+    assert eff == 0x00852483, (
+        "c.lw s1,8(a0) expanded to %08x, expected lw s1,8(a0) (0x00852483)" % eff
+    )
+    assert (eff_opcode(eff), eff_rd(eff), eff_rs1(eff), eff_imm_i(eff)) == (
+        OP_LOAD, 9, 10, 8
+    ), "expanded word is not `lw x9, 8(x10)`: %08x" % eff
+    await expect_fields(dut, word, "c.lw s1,8(a0)",
+                        alu_op=ALU_ADD, op1_sel=OP1_RS1, op2_sel=OP2_IMM,
+                        imm_sel=IMM_I, mem_read=1, mem_size=MEM_WORD,
+                        uses_rs1=1, uses_rd=1, reg_write=1, wb_sel=WB_MEM)
+
+
+@cocotb.test()
+async def test_c_sw_expands_to_sw(dut):
+    """c.sw rs2', offset(rs1') == `sw rs2', offset(rs1')`.
+
+    rs2' is x9, rs1' is x10, offset 8; the assembler's equivalent
+    `sw s1, 8(a0)` is 0x00952423.
+    """
+    word = C_SW_S1_8_A0
+    eff = await expanded(dut, word)
+    assert eff == 0x00952423, (
+        "c.sw s1,8(a0) expanded to %08x, expected sw s1,8(a0) (0x00952423)" % eff
+    )
+    assert (eff_opcode(eff), eff_rs1(eff), eff_rs2(eff), eff_imm_s(eff)) == (
+        OP_STORE, 10, 9, 8
+    ), "expanded word is not `sw x9, 8(x10)`: %08x" % eff
+    await expect_fields(dut, word, "c.sw s1,8(a0)",
+                        alu_op=ALU_ADD, op1_sel=OP1_RS1, op2_sel=OP2_IMM,
+                        imm_sel=IMM_S, mem_write=1, mem_size=MEM_WORD,
+                        uses_rs1=1, uses_rs2=1, reg_write=0)
+
+
+@cocotb.test()
+async def test_c_addi4spn_with_zero_immediate_is_illegal(dut):
+    """c.addi4spn with nzuimm == 0 is a reserved encoding, not `addi rd, sp, 0`.
+
+    0x0004 has rd' = 1 (x9) and an all-zero nzuimm: a nonzero destination, so
+    this is specifically the zero-immediate rule and not the all-zero word.
+    """
+    await expect_illegal(dut, 0x0004, "c.addi4spn x9, sp, 0")
+
+
+@cocotb.test()
+async def test_rv64_quadrant0_forms_are_illegal(dut):
+    """C.LD (funct3 011) and C.SD (funct3 111) are RV64 and illegal in RV32.
+
+    Review Focus 4: the decoder must not silently accept the 64-bit forms just
+    because they share quadrant 0 with C.LW/C.SW.
+    """
+    await expect_illegal(dut, 0x6000, "C.LD")
+    await expect_illegal(dut, 0xE000, "C.SD")
 
 
 @cocotb.test()
 async def test_instructions_longer_than_32_bits_are_illegal(dut):
-    """instr[4:2] == 111 marks the escape to 48-bit and longer encodings.
+    """instr[4:2] == 111 with instr[1:0] == 11 escapes to a longer encoding.
 
-    No such instruction exists in phase 1, and treating one as an ordinary
-    32-bit word would decode whatever sits in its upper half as an opcode.
-    Sixteen of the 128 opcode values have `instr[4:2] == 111`; none is
-    implemented, so each is swept here.
+    No such instruction exists, and treating one as an ordinary 32-bit word
+    would decode whatever sits in its upper half as an opcode. Only words that
+    also have `instr[1:0] == 11` are over-long: when `instr[1:0] != 11` the word
+    is a 16-bit *compressed* instruction and those bits belong to it, which is
+    what the C-extension tests below cover. So the sweep is restricted to the
+    four opcodes with both fields set.
     """
     swept = 0
     for opcode in range(128):
-        if (opcode >> 2) & 0b111 != 0b111:
+        if (opcode >> 2) & 0b111 != 0b111 or opcode & 0b11 != 0b11:
             continue
         for funct3 in range(8):
             word = (0xDEADBEEF & ~0x7FFF) | (funct3 << 12) | opcode
             await expect_illegal(dut, word, "over-long opcode %s" % format(opcode, "07b"))
             swept += 1
-    assert swept == 16 * 8, "expected to sweep 16 over-long opcodes, swept %d" % swept
+    assert swept == 4 * 8, "expected to sweep 4 over-long opcodes, swept %d" % swept
 
 
 # ---------------------------------------------------------------------------

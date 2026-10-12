@@ -222,6 +222,7 @@ ends of the writeback path.
 | Port | Dir | Width | Meaning |
 |---|---|---|---|
 | `instr` | in | 32 | instruction word from `if_stage` |
+| `instr_eff` | out | 32 | the word after RV32C expansion: the 32-bit equivalent of a compressed encoding, or `instr` unchanged for a 32-bit instruction. `core` takes rs1/rs2/rd and the immediate from this, not from `instr` |
 | `alu_op` | out | 4 | ALU operation select; encoding owned by `alu` / `ex_stage` |
 | `op1_sel` | out | 2 | 0 = rs1, 1 = pc, 2 = zero |
 | `op2_sel` | out | 3 | 0 = rs2, 1 = imm, 2 = 4, 3 = pc |
@@ -246,6 +247,14 @@ instruction, combinationally and with no pipeline state, so `core` can pack
 them into ID/EX in the same cycle the instruction is decoded. `imm_sel`
 encoding is **0 = I, 1 = S, 2 = B, 3 = U, 4 = J**. `mem_size` is meaningful
 only when `mem_read` or `mem_write` is high and is `0` otherwise.
+
+**RV32C expansion.** When `instr[1:0] != 2'b11` the word is a 16-bit compressed
+instruction; `decode` rewrites it into its canonical 32-bit equivalent and
+publishes that word on `instr_eff` before decoding it. `instr_eff` equals
+`instr` for every 32-bit instruction, and is `0` for a compressed encoding that
+is not implemented in RV32 (those decode illegal). Because expansion relocates
+the register indices and the immediate, **`core` must take rs1/rs2/rd from
+`instr_eff`, and `imm_gen` must consume `instr_eff`, not the raw `instr`**.
 
 `is_branch`, `is_jal` and `is_jalr` are **mutually exclusive**: at most one is
 high for any instruction, so `ex_stage` resolves a branch or jump from them plus

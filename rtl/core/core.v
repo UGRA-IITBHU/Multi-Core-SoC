@@ -129,11 +129,13 @@ module core (
   // --------------------------------------------------------------------------
   // Register indices. Extracted here rather than in `decode` because three
   // fixed bit ranges are wiring, not decoding - and `decode` must stay a pure
-  // function of the instruction word.
+  // function of the instruction word.  Taken from `d_instr_eff`, the expanded
+  // word: a compressed encoding carries rd'/rs1'/rs2' in different bit
+  // positions, so the raw `if_id_instr` would yield the wrong indices.
   // --------------------------------------------------------------------------
-  wire [`p_REG_ADDR_W-1:0] if_rs1_addr = if_id_instr[19:15];
-  wire [`p_REG_ADDR_W-1:0] if_rs2_addr = if_id_instr[24:20];
-  wire [`p_REG_ADDR_W-1:0] if_rd_addr  = if_id_instr[11:7];
+  wire [`p_REG_ADDR_W-1:0] if_rs1_addr = d_instr_eff[19:15];
+  wire [`p_REG_ADDR_W-1:0] if_rs2_addr = d_instr_eff[24:20];
+  wire [`p_REG_ADDR_W-1:0] if_rd_addr  = d_instr_eff[11:7];
 
   // --------------------------------------------------------------------------
   // IF stage
@@ -150,6 +152,7 @@ module core (
   wire [`p_XLEN-1:0] rs1_data;
   wire [`p_XLEN-1:0] rs2_data;
 
+  wire [`p_INSTR_W-1:0] d_instr_eff;
   wire [`p_ALU_OP_W-1:0] d_alu_op_bits;
   wire                  d_uses_rs1, d_uses_rs2, d_uses_rd;
   wire                  d_reg_write, d_mem_read, d_mem_write, d_mem_unsigned;
@@ -363,6 +366,7 @@ module core (
 
   decode u_decode (
     .instr        (if_id_instr),
+    .instr_eff    (d_instr_eff),
     .alu_op       (d_alu_op_bits),
     .op1_sel      (d_op1_sel),
     .op2_sel      (d_op2_sel),
@@ -384,7 +388,7 @@ module core (
   );
 
   imm_gen u_imm_gen (
-    .instr   (if_id_instr),
+    .instr   (d_instr_eff),
     .imm_sel (d_imm_sel),
     .imm     (d_imm)
   );

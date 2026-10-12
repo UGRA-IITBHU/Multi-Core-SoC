@@ -7,6 +7,12 @@
 //
 // Ports (frozen; see docs/contracts/phase1-interfaces.md):
 //   instr          input  32  instruction word from `if_stage`
+//   instr_eff      output 32  the word after RV32C expansion: the 32-bit
+//                             equivalent of a compressed encoding, or `instr`
+//                             unchanged for a 32-bit instruction.  `core` takes
+//                             the register indices and the immediate from this,
+//                             never from the raw word, because a compressed
+//                             encoding carries both in different bit positions.
 //   alu_op         output 4   ALU operation select (encoding owned by `alu`)
 //   op1_sel        output 2   0 = rs1, 1 = pc, 2 = zero
 //   op2_sel        output 3   0 = rs2, 1 = imm, 2 = 4, 3 = pc
@@ -123,8 +129,10 @@
 //     is 1111111 - the most common instruction in the ISA.  Only the two shift
 //     funct3s (001 and 101) put an operation-selecting field in instr[31:25],
 //     and only those are checked.  Phase 2 adds M.
-//   * C-extension encodings - caught by the `instr[1:0] != 2'b11` check, which
-//     rejects all 16-bit instructions.  Phase 2 adds them.
+//   * C-extension encodings that are not implemented - the expander (DESIGN
+//     NOTE 6) rewrites every recognised 16-bit encoding into a 32-bit word with
+//     `instr_eff[1:0] == 11`, and returns 0 for everything else, so an
+//     unimplemented compressed encoding still fails the `not_32bit` gate below.
 //   * Instructions longer than 32 bits - caught by `instr[4:2] == 3'b111`.
 //   * The whole SYSTEM opcode (1110011), which covers ECALL, EBREAK and the
 //     Zicsr CSR accesses.  ECALL and EBREAK *are* base RV32I, but acting on
@@ -134,16 +142,29 @@
 //     return to the next instruction, which is the classic silent-wrong-answer
 //     bug.  Phase 3 re-opens this arm when the trap path exists.
 //
-// A NOTE ON THE TWO LENGTH GATES.  `instr[1:0] != 11` and `instr[4:2] == 111`
-// are checked before the opcode switch, so a 16-bit or over-long word cannot
-// half-match an opcode.  In phase 1 both are *redundant*: every implemented
-// opcode already has `instr[1:0] == 11` and `instr[4:2] != 111`, so such a word
-// comes out illegal through the opcode `default` either way.  They are kept
-// because phase 2 changes that.  The C extension starts matching 16-bit
-// opcodes, and `instr[1:0]` is exactly the field that says how wide the
-// instruction is; a decoder that dispatched on the opcode without checking the
-// length first would read a 16-bit instruction's upper bits as a 32-bit opcode.
-// Insurance against a future bug rather than a present one.
+// A NOTE ON THE TWO LENGTH GATES.  `not_32bit` and `longer_than_32` are
+// checked before the opcode switch, so a word cannot half-match an opcode.
+// Both now test `instr_eff`, not the raw `instr`: after expansion every
+// recognised instruction is a canonical 32-bit word with `instr_eff[1:0] == 11`
+// and `instr_eff[4:2] != 111`, and an unsupported encoding expands to 0, which
+// fails `not_32bit`.  So the gates reject over-long words and unsupported
+// compressed encodings without either needing a special case.
+//
+// ---------------------------------------------------------------------------
+// DESIGN NOTE 6 - RV32C EXPANSION, AND WHY `instr_eff` IS AN OUTPUT
+//
+// When `instr[1:0] != 2'b11` the word is a 16-bit (compressed) instruction, and
+// `rvc_expand` rewrites it into its canonical 32-bit equivalent before the
+// decode case runs.  This "expand, then decode" shape (spec 4.5) keeps one
+// control-generation path, so a compressed form cannot drift from its 32-bit
+// twin, and every encoding is unit-testable by asserting on its expansion.
+//
+// `instr_eff` is exposed as a port, not kept internal, because expansion moves
+// the register indices and the immediate: a compressed form carries rd'/rs1'/
+// rs2' in different bit positions and a scrambled immediate, so `core` must
+// take those fields from the expanded word.  `imm_gen` also consumes
+// `instr_eff`, for the same reason.  `instr_eff == instr` for every 32-bit
+// instruction, so nothing outside the compressed path changes.
 //
 // ---------------------------------------------------------------------------
 // DESIGN NOTE 5 - `uses_rd` VERSUS `reg_write`
@@ -175,6 +196,7 @@ module decode (
   // class the stubs suppress around their port lists, and for the same reason.
   input  wire [`p_INSTR_W-1:0]    instr,
   /* verilator lint_on UNUSEDSIGNAL */
+  output wire [`p_INSTR_W-1:0]    instr_eff,
   output wire [`p_ALU_OP_W-1:0]   alu_op,
   output wire [`p_OP1_SEL_W-1:0]  op1_sel,
   output wire [`p_OP2_SEL_W-1:0]  op2_sel,
@@ -277,14 +299,86 @@ module decode (
   // Instruction fields.  `decode` deliberately has no rs1/rs2/rd *outputs*:
   // extracting three fixed bit ranges is wiring, and `core` does it.
   // --------------------------------------------------------------------------
-  wire [6:0] opcode  = instr[6:0];
-  wire [2:0] funct3  = instr[14:12];
-  wire [6:0] funct7  = instr[31:25];
+  // --------------------------------------------------------------------------
+  // RV32C expansion (see DESIGN NOTE 6).  A compressed instruction is rewritten
+  // into its canonical 32-bit equivalent before any decoding happens, so the
+  // opcode switch below sees one uniform 32-bit encoding.  `instr_eff` is the
+  // word the rest of this module works on, and `core` reads the register
+  // indices and the immediate from it.
+  // --------------------------------------------------------------------------
+  reg [`p_INSTR_W-1:0] instr_eff_r;
+  always @(*) begin
+    instr_eff_r = (instr[1:0] == 2'b11) ? instr : rvc_expand(instr[15:0]);
+  end
 
-  // A 16-bit (compressed) instruction has instr[1:0] != 11.  Instructions
-  // longer than 32 bits have instr[4:2] == 111.  Neither exists in phase 1.
-  wire not_32bit   = (instr[1:0] != 2'b11);
-  wire longer_than_32 = (instr[4:2] == 3'b111);
+  wire [6:0] opcode  = instr_eff_r[6:0];
+  wire [2:0] funct3  = instr_eff_r[14:12];
+  wire [6:0] funct7  = instr_eff_r[31:25];
+
+  // An unexpanded word (32-bit or an unsupported compressed encoding) is
+  // "not 32 bit" only when it did not expand to a canonical opcode: an
+  // unsupported encoding expands to 0, whose instr_eff[1:0] is not 11, so the
+  // gate below still rejects it.  Instructions longer than 32 bits have
+  // instr[4:2] == 111.
+  wire not_32bit   = (instr_eff_r[1:0] != 2'b11);
+  wire longer_than_32 = (instr_eff_r[4:2] == 3'b111);
+
+  // --------------------------------------------------------------------------
+  // RV32C expander (DESIGN NOTE 6).  Each quadrant function returns the
+  // canonical 32-bit word, or 0 for any encoding it does not implement -- 0
+  // then falls out illegal through the opcode `default`, so there is no
+  // separate legality flag to keep in sync.  Words are built with the same
+  // field layouts the 32-bit encoder uses (I-type / S-type).
+  //
+  // Compressed register operands are always x8..x15, spelled `2'b01` + the
+  // 3-bit field.  The immediate bit-maps are RISC-V Volume I, section 16.7.
+  // --------------------------------------------------------------------------
+  function [`p_INSTR_W-1:0] rvc_q0;
+    /* verilator lint_off UNUSEDSIGNAL */
+    // h[1:0] is the quadrant selector, spent in `rvc_expand` before dispatch.
+    input [15:0] h;
+    /* verilator lint_on UNUSEDSIGNAL */
+    reg [4:0]  rd_p;
+    reg [4:0]  rs1_p;
+    reg [4:0]  rs2_p;
+    reg [11:0] imm;
+    begin
+      rd_p    = {2'b01, h[4:2]};
+      rs1_p   = {2'b01, h[9:7]};
+      rs2_p   = {2'b01, h[4:2]};
+      imm     = 12'b0;
+      rvc_q0  = 32'h0000_0000;
+      case (h[15:13])
+        3'b000: begin  // C.ADDI4SPN -> addi rd', x2, nzuimm
+          imm = {2'b00, h[10:7], h[12:11], h[5], h[6], 2'b00};
+          if (imm != 12'b0)
+            rvc_q0 = {imm, 5'd2, 3'b000, rd_p, OP_OP_IMM};
+        end
+        3'b010: begin  // C.LW -> lw rd', uimm(rs1')
+          imm = {5'b0, h[5], h[12:10], h[6], 2'b00};
+          rvc_q0 = {imm, rs1_p, 3'b010, rd_p, OP_LOAD};
+        end
+        3'b110: begin  // C.SW -> sw rs2', uimm(rs1')
+          imm = {5'b0, h[5], h[12:10], h[6], 2'b00};
+          rvc_q0 = {imm[11:5], rs2_p, rs1_p, 3'b010, imm[4:0], OP_STORE};
+        end
+        default: begin
+          // C.LD (011) and C.SD (111) are RV64-only, and 001/100/101 are
+          // reserved: all stay 0 and decode illegal.
+        end
+      endcase
+    end
+  endfunction
+
+  function [`p_INSTR_W-1:0] rvc_expand;
+    input [15:0] h;
+    begin
+      case (h[1:0])
+        2'b00:   rvc_expand = rvc_q0(h);
+        default: rvc_expand = 32'h0000_0000;  // quadrants 1 and 2 yet
+      endcase
+    end
+  endfunction
 
   // --------------------------------------------------------------------------
   // Combinational decode.  Outputs are wires in the frozen port list, so the
@@ -722,6 +816,7 @@ module decode (
     end
   end
 
+  assign instr_eff     = instr_eff_r;
   assign alu_op        = alu_op_r;
   assign op1_sel       = op1_sel_r;
   assign op2_sel       = op2_sel_r;

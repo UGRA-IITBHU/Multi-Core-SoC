@@ -103,6 +103,7 @@ CONTRACT = {
     "decode": {
         "ports": [
             ("instr", "in", 32),
+            ("instr_eff", "out", 32),
             ("alu_op", "out", 4),
             ("op1_sel", "out", 2),
             ("op2_sel", "out", 3),
