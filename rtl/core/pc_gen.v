@@ -14,16 +14,17 @@
 //   redirect_pc      input  32   resolved redirect target
 //   pred_taken       input  1    static prediction says the next PC is `pred_pc
 //   pred_pc          input  32   predicted next PC
+//   pc_step          input  32   length of the instruction at `pc`, in bytes
 //   pc               output 32   address of the instruction being fetched
 //   next_pc          output 32   combinational next address after the arbiter
 //
 // Guarantee to `if_stage`: `pc` always holds the address of the instruction
 // currently being fetched; while `stall` is high `pc` does not advance, and
 // `redirect_valid` takes priority over both `pred_taken` and the sequential
-// +4 step in the same cycle it is presented.
+// `pc + pc_step` step in the same cycle it is presented.
 //
 // Guarantee to `core`: `next_pc` is the combinational result of that same
-// priority arbiter - `redirect_valid` > `pred_taken` > `pc + 4` - and is valid
+// priority arbiter - `redirect_valid` > `pred_taken` > `pc + pc_step` - and is valid
 // in the same cycle as `pc`, so the arbiter's decision is observable without
 // waiting a cycle for `pc` to register.  `pc` and `next_pc` never disagree
 // about which source won.
@@ -70,25 +71,21 @@ module pc_gen (
   input  wire [`p_PC_W-1:0]  redirect_pc,
   input  wire                pred_taken,
   input  wire [`p_PC_W-1:0]  pred_pc,
+  input  wire [`p_PC_W-1:0]  pc_step,
   output wire [`p_PC_W-1:0]  pc,
   output wire [`p_PC_W-1:0]  next_pc
 );
-
-  // One instruction is 4 bytes.  This constant belongs in `defs.vh` with the
-  // other global datapath constants; `defs.vh` is a frozen contract header, so
-  // the addition is reported to the controller rather than made here.
-  localparam [`p_PC_W-1:0] p_PC_STEP = `p_PC_W'd4;
 
   reg [`p_PC_W-1:0] pc_q;
 
   assign pc = pc_q;
 
   // The single redirect funnel.  Priority: `redirect_valid` > `pred_taken` >
-  // `pc + 4`.  `next_pc` is the decision itself, not a delayed copy of it, so
-  // the PC and `next_pc` can never disagree about which source won.
+  // `pc + pc_step`.  `next_pc` is the decision itself, not a delayed copy of
+  // it, so the PC and `next_pc` can never disagree about which source won.
   assign next_pc = redirect_valid ? redirect_pc :
                    pred_taken    ? pred_pc    :
-                                   (pc_q + p_PC_STEP);
+                                   (pc_q + pc_step);
 
   always @(posedge clk) begin
     if (!rst_n)
@@ -108,7 +105,7 @@ module pc_gen (
     if (rst_n) begin
       assert (!redirect_valid || next_pc == redirect_pc) else $error("pc_gen: a redirect must win the next_pc arbiter");
       assert (redirect_valid || !pred_taken || next_pc == pred_pc) else $error("pc_gen: a prediction must outrank the sequential step");
-      assert (redirect_valid || pred_taken || next_pc == pc + p_PC_STEP) else $error("pc_gen: next_pc must fall through to pc + 4");
+      assert (redirect_valid || pred_taken || next_pc == pc + pc_step) else $error("pc_gen: next_pc must fall through to pc + pc_step");
     end
   end
 

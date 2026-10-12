@@ -121,16 +121,17 @@ prediction.
 | `redirect_pc` | in | 32 | resolved redirect target |
 | `pred_taken` | in | 1 | static prediction says the next PC is `pred_pc` |
 | `pred_pc` | in | 32 | predicted next PC |
+| `pc_step` | in | 32 | length of the instruction at `pc`, in bytes (2 or 4) |
 | `pc` | out | 32 | address of the instruction being fetched |
 | `next_pc` | out | 32 | combinational next address after the arbiter |
 
 **Guarantee to `if_stage`.** `pc` always holds the address of the instruction
 currently being fetched; while `stall` is high `pc` does not advance, and
-`redirect_valid` takes priority over both `pred_taken` and the sequential +4
-step in the same cycle it is presented.
+`redirect_valid` takes priority over both `pred_taken` and the sequential
+`pc + pc_step` step in the same cycle it is presented.
 
 **Guarantee to `core`.** `next_pc` is the combinational result of that same
-priority arbiter — `redirect_valid` > `pred_taken` > `pc + 4` — and is valid in
+priority arbiter — `redirect_valid` > `pred_taken` > `pc + pc_step` — and is valid in
 the same cycle as `pc`, so the arbiter's decision is observable without waiting a
 cycle for `pc` to register. `pc` and `next_pc` never disagree about which source
 won.

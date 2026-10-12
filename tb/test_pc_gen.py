@@ -2,10 +2,10 @@
 
 What is actually under test, and why each test exists:
 
-* `pc` starts at `p_RESET_VEC` on reset and steps by one instruction (4) per
-  cycle otherwise.
+* `pc` starts at `p_RESET_VEC` on reset and steps by the instruction length
+  (`pc_step`, 2 or 4) per cycle otherwise.
 * `next_pc` is the *combinational* result of the arbiter
-  `redirect_valid` > `pred_taken` > `pc + 4`, and `pc` takes exactly the value
+  `redirect_valid` > `pred_taken` > `pc + pc_step`, and `pc` takes exactly the value
   `next_pc` showed in the cycle before, so the two can never disagree about
   which source won.
 * `stall` freezes `pc` without freezing the arbiter.
@@ -50,13 +50,15 @@ async def start(dut, **inputs):
     await reset(dut)
 
 
-def idle(dut, stall=0, redirect_valid=0, redirect_pc=0, pred_taken=0, pred_pc=0):
+def idle(dut, stall=0, redirect_valid=0, redirect_pc=0, pred_taken=0, pred_pc=0,
+         pc_step=PC_STEP):
     """Drive every control input to a stated value."""
     dut.stall.value = stall
     dut.redirect_valid.value = redirect_valid
     dut.redirect_pc.value = redirect_pc
     dut.pred_taken.value = pred_taken
     dut.pred_pc.value = pred_pc
+    dut.pc_step.value = pc_step
 
 
 class PcGenModel:
@@ -65,17 +67,21 @@ class PcGenModel:
     def __init__(self):
         self.pc = RESET_VEC
 
-    def next_pc(self, redirect_valid, redirect_pc, pred_taken, pred_pc):
+    def next_pc(self, redirect_valid, redirect_pc, pred_taken, pred_pc, pc_step):
         """The combinational arbiter, in the contract's priority order."""
+        if pc_step == 0:
+            raise ValueError(
+                "pc_step == 0: a zero step would let a frozen PC match the model"
+            )
         if redirect_valid:
             return redirect_pc & MASK
         if pred_taken:
             return pred_pc & MASK
-        return (self.pc + PC_STEP) & MASK
+        return (self.pc + pc_step) & MASK
 
-    def step(self, stall, redirect_valid, redirect_pc, pred_taken, pred_pc):
+    def step(self, stall, redirect_valid, redirect_pc, pred_taken, pred_pc, pc_step):
         """Advance one clock edge and return the value `next_pc` must show."""
-        nxt = self.next_pc(redirect_valid, redirect_pc, pred_taken, pred_pc)
+        nxt = self.next_pc(redirect_valid, redirect_pc, pred_taken, pred_pc, pc_step)
         if redirect_valid:
             self.pc = redirect_pc & MASK
         elif not stall:
@@ -124,6 +130,28 @@ async def test_increments_by_four(dut):
         assert int(dut.pc.value) == expected, (
             "pc is 0x%08x, expected 0x%08x" % (int(dut.pc.value), expected)
         )
+
+
+@cocotb.test()
+async def test_steps_by_pc_step(dut):
+    """`pc` advances by `pc_step`, so a 2-byte compressed instruction steps 2."""
+    await start(dut, pc_step=2)
+    before = int(dut.pc.value)
+    await settle()
+    assert int(dut.next_pc.value) == (before + 2) & MASK
+    await cycles(dut, 1)
+    assert int(dut.pc.value) == (before + 2) & MASK
+
+
+@cocotb.test()
+async def test_pc_step_is_per_cycle(dut):
+    """A step of 4 then 2 is applied in the cycle each is presented."""
+    await start(dut, pc_step=4)
+    assert int(dut.pc.value) == RESET_VEC + 4
+    idle(dut, pc_step=2)
+    await settle()
+    await cycles(dut, 1)
+    assert int(dut.pc.value) == RESET_VEC + 6
 
 
 @cocotb.test()
@@ -299,6 +327,9 @@ async def test_next_pc_previews_the_pc_that_follows(dut):
             pred_taken = rng.randint(0, 1)
             redirect_pc = rng.randrange(0, 1 << 32)
             pred_pc = rng.randrange(0, 1 << 32)
+        # Mix the two legal lengths: a fixed step cannot tell "uses pc_step"
+        # from "uses the constant 4", which is the bug this work exists to fix.
+        pc_step = rng.choice((2, 4))
         idle(
             dut,
             stall=stall,
@@ -306,9 +337,12 @@ async def test_next_pc_previews_the_pc_that_follows(dut):
             redirect_pc=redirect_pc,
             pred_taken=pred_taken,
             pred_pc=pred_pc,
+            pc_step=pc_step,
         )
         await settle()
-        expected_next = model.next_pc(redirect_valid, redirect_pc, pred_taken, pred_pc)
+        expected_next = model.next_pc(
+            redirect_valid, redirect_pc, pred_taken, pred_pc, pc_step
+        )
         assert int(dut.next_pc.value) == expected_next, (
             "cycle %d: next_pc is 0x%08x, model says 0x%08x "
             "(stall=%d redirect_valid=%d redirect_pc=0x%08x pred_taken=%d pred_pc=0x%08x)"
@@ -324,7 +358,7 @@ async def test_next_pc_previews_the_pc_that_follows(dut):
             )
         )
         await cycles(dut, 1)
-        model.step(stall, redirect_valid, redirect_pc, pred_taken, pred_pc)
+        model.step(stall, redirect_valid, redirect_pc, pred_taken, pred_pc, pc_step)
         assert int(dut.pc.value) == model.pc, (
             "cycle %d: pc is 0x%08x, model says 0x%08x"
             % (cycle, int(dut.pc.value), model.pc)

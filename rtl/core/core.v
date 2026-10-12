@@ -314,6 +314,9 @@ module core (
     .redirect_pc    (ex_redirect_pc),
     .pred_taken     (if_id_pred_taken),
     .pred_pc        (if_id_pred_pc),
+    // Phase 1 has no compressed instructions, so every fetch steps 4 bytes.
+    // T2 replaces this constant with `if_stage.instr_len`.
+    .pc_step        (32'd4),
     .pc             (pc),
     .next_pc        (pc_next_unused)
   );

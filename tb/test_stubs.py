@@ -63,6 +63,7 @@ CONTRACT = {
             ("redirect_pc", "in", 32),
             ("pred_taken", "in", 1),
             ("pred_pc", "in", 32),
+            ("pc_step", "in", 32),
             ("pc", "out", 32),
             ("next_pc", "out", 32),
         ],
