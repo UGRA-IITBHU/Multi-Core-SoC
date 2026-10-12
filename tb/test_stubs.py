@@ -80,6 +80,7 @@ CONTRACT = {
             ("if_req_valid", "out", 1),
             ("if_req_addr", "out", 32),
             ("instr", "out", 32),
+            ("instr_len", "out", 3),
             ("pred_taken", "out", 1),
             ("pred_pc", "out", 32),
         ],

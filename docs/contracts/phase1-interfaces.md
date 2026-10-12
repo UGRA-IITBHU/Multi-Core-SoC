@@ -158,18 +158,23 @@ instruction-fetch memory port, and publish the static next-PC prediction that
 | `if_req_valid` | out | 1 | request is being presented to fetch memory |
 | `if_req_addr` | out | 32 | request address |
 | `instr` | out | 32 | instruction word handed to decode |
+| `instr_len` | out | 3 | length of `instr` in bytes (2 or 4); valid in `ST_HOLD` |
 | `pred_taken` | out | 1 | static prediction is a taken branch |
 | `pred_pc` | out | 32 | predicted next PC |
 
 **Guarantee to `decode` / `regfile` / `imm_gen`.** While `stall` and `flush`
 are both low, `instr` is the instruction at `pc`; when `flush` is high the
 instruction in flight is squashed so the following stage sees no stale
-instruction. `pred_taken` and `pred_pc` are the only prediction state.
+instruction. With the `C` extension the byte at `pc` may start a 2-byte
+instruction in either half of the fetched word, so `instr` is the selected
+instruction encoding (`{16'b0, half}` for compressed, the whole word for
+32-bit) and `instr_len` is its length. `pred_taken` and `pred_pc` are the only
+prediction state.
 
 **Guarantee to fetch memory.** `if_req_valid` stays high from the cycle the
 request is presented until `if_rsp_valid` is seen, and `if_req_addr` remains
 stable for the whole of that window, so fetch memory may accept the request at
-its own pace.
+its own pace. `if_req_addr` is the 4-byte-aligned word address `{pc[31:2], 2'b00}`.
 
 **Note — two ports, one address space.** Instruction fetch has its own port
 pair (`if_req_*` / `if_rsp_*`) rather than sharing `mem_req_*` / `mem_rsp_*` with

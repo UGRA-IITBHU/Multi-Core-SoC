@@ -142,6 +142,7 @@ module core (
   wire              if_pred_taken;
   wire [`p_PC_W-1:0] if_pred_pc;
   wire [`p_INSTR_W-1:0] if_instr;
+  wire [2:0]        if_instr_len;
 
   // --------------------------------------------------------------------------
   // ID stage
@@ -314,9 +315,12 @@ module core (
     .redirect_pc    (ex_redirect_pc),
     .pred_taken     (if_id_pred_taken),
     .pred_pc        (if_id_pred_pc),
-    // Phase 1 has no compressed instructions, so every fetch steps 4 bytes.
-    // T2 replaces this constant with `if_stage.instr_len`.
-    .pc_step        (32'd4),
+    // The step is the fetched instruction's length: 4 for a 32-bit encoding,
+    // 2 for a compressed one.  `instr_len` is only meaningful in `if_stage`'s
+    // ST_HOLD, which is exactly the cycle `pc_gen` is not stalled and takes
+    // this step, so the length and the step always describe the same
+    // instruction.
+    .pc_step        ({29'b0, if_instr_len}),
     .pc             (pc),
     .next_pc        (pc_next_unused)
   );
@@ -338,6 +342,7 @@ module core (
     .if_req_valid (if_req_valid),
     .if_req_addr  (if_req_addr),
     .instr        (if_instr),
+    .instr_len    (if_instr_len),
     .pred_taken   (if_pred_taken),
     .pred_pc      (if_pred_pc)
   );

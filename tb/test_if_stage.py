@@ -148,6 +148,68 @@ async def start(dut, **inputs):
     await reset(dut)
 
 
+async def fetch_at(dut, pc, rdata):
+    """Reset, fetch at `pc`, answer with `rdata`, and read the presented result.
+
+    Returns `(instr, instr_len)` from the hold cycle.  `pc` is driven before
+    reset so the stage captures it as the request address, and `rdata` is the
+    raw 32-bit word the memory returns for the aligned fetch.
+    """
+    await start(dut, pc=pc)
+    dut.if_rsp_valid.value = 1
+    dut.if_rsp_rdata.value = rdata
+    await cycles(dut, 1)
+    return int(dut.instr.value), int(dut.instr_len.value)
+
+
+@cocotb.test()
+async def test_instr_is_the_low_halfword_when_compressed(dut):
+    """pc[1]==0 and a compressed low half: instr is that halfword, len is 2."""
+    instr, length = await fetch_at(dut, pc=0x0000_0100, rdata=0x0000_4081)
+    assert instr == 0x0000_4081
+    assert length == 2
+
+
+@cocotb.test()
+async def test_instr_is_the_high_halfword_when_pc_is_halfword_aligned(dut):
+    """pc[1]==1: the instruction is the high half, len 2, low half ignored."""
+    instr, length = await fetch_at(dut, pc=0x0000_0106, rdata=0x9782_0000)
+    assert instr == 0x0000_9782
+    assert length == 2
+
+
+@cocotb.test()
+async def test_instr_is_the_whole_word_when_32_bit(dut):
+    """pc[1]==0 and low half == 2'b11: the full word is the instruction, len 4."""
+    instr, length = await fetch_at(dut, pc=0x0000_0100, rdata=0x00C5_8533)
+    assert instr == 0x00C5_8533
+    assert length == 4
+
+
+@cocotb.test()
+async def test_high_half_with_a_32_bit_opcode_is_illegal(dut):
+    """A 32-bit opcode at pc[1]==1 is misaligned, not decoded.
+
+    The high half is 0x9F83 (low two bits 11).  Nothing may present it as the
+    low half of a 32-bit instruction; the stage must present a word that
+    decodes illegal, which here is all-zero.
+    """
+    instr, length = await fetch_at(dut, pc=0x0000_0106, rdata=0x9F83_0000)
+    assert instr == 0x0000_0000
+    assert length == 2
+
+
+@cocotb.test()
+async def test_fetch_address_is_word_aligned(dut):
+    """A halfword-aligned pc presents a word-aligned request address."""
+    await start(dut, pc=0x0000_0106)
+    assert int(dut.if_req_valid.value) == 1
+    assert int(dut.if_req_addr.value) == 0x0000_0104, (
+        "if_req_addr is 0x%08x at pc 0x0000_0106, expected 0x0000_0104"
+        % int(dut.if_req_addr.value)
+    )
+
+
 @cocotb.test()
 async def test_presents_nothing_out_of_reset(dut):
     """Out of reset no instruction is on `instr` and the prediction is not taken.

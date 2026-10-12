@@ -15,8 +15,9 @@
 //   if_rsp_rdata input  32   instruction word returned by fetch memory
 //   if_rsp_valid input  1    fetch memory has returned an instruction
 //   if_req_valid output 1    request is being presented to fetch memory
-//   if_req_addr  output 32   request address
+//   if_req_addr  output 32   request address (4-byte aligned)
 //   instr       output 32   instruction word being handed to decode
+//   instr_len   output 3    length of `instr` in bytes (2 or 4)
 //   pred_taken  output 1    static prediction is a taken branch
 //   pred_pc     output 32   predicted next PC
 //
@@ -104,6 +105,7 @@ module if_stage (
   output wire                  if_req_valid,
   output wire [`p_PC_W-1:0]    if_req_addr,
   output wire [`p_INSTR_W-1:0] instr,
+  output wire [2:0]            instr_len,
   output wire                  pred_taken,
   output wire [`p_PC_W-1:0]    pred_pc
 );
@@ -135,10 +137,24 @@ module if_stage (
 
   // Stable for the whole window: in ST_IDLE it is the address being presented
   // now, in the two states that carry a request it is the address captured
-  // when the request was presented.
-  assign if_req_addr  = (state == ST_IDLE) ? pc : req_addr_q;
+  // when the request was presented.  Always the 4-byte-aligned word containing
+  // `pc`; with the C extension `pc` may itself be halfword aligned.
+  assign if_req_addr  = (state == ST_IDLE) ? {pc[`p_PC_W-1:2], 2'b00} : req_addr_q;
 
-  assign instr = instr_q;
+  // Select the instruction out of the fetched word.  A 32-bit instruction is
+  // 4-byte aligned, so at pc[1] the only legal encoding is compressed; a half
+  // whose low two bits look like a 32-bit opcode there is really a misaligned
+  // instruction and must come out illegal, not be read as the low half of some
+  // unrelated 32-bit instruction.
+  wire        at_high    = pc[1];
+  wire        high_is_32 = (instr_q[17:16] == 2'b11);
+  wire        low_is_32  = (instr_q[1:0]   == 2'b11);
+
+  assign instr     = at_high ? (high_is_32 ? {`p_INSTR_W{1'b0}} : {16'b0, instr_q[31:16]})
+                             : (low_is_32  ? instr_q : {16'b0, instr_q[15:0]});
+  // A byte length: 3 bits, because the value 4 does not fit in 2.  See the
+  // ledger ruling for the spec's "2-bit instruction length".
+  assign instr_len = (at_high || !low_is_32) ? 3'd2 : 3'd4;
 
   assign pred_taken = 1'b0;
   assign pred_pc    = pc + p_PC_STEP;
@@ -156,7 +172,7 @@ module if_stage (
       // discarded in the same way.
       instr_q <= {`p_INSTR_W{1'b0}};
       if (state == ST_IDLE)
-        req_addr_q <= pc;
+        req_addr_q <= {pc[`p_PC_W-1:2], 2'b00};
       if (if_req_valid && !if_rsp_valid)
         state <= ST_DISCARD;
       else
@@ -170,7 +186,7 @@ module if_stage (
           // Capture the address now, so the request window that follows is
           // stable whatever `pc` does -- the guarantee must not depend on how
           // `core` wires `pc_gen.stall`.
-          req_addr_q <= pc;
+          req_addr_q <= {pc[`p_PC_W-1:2], 2'b00};
           if (if_rsp_valid) begin
             // A zero-latency memory answers in the request's own cycle; the
             // transfer is complete, so nothing is left outstanding.
@@ -205,9 +221,12 @@ module if_stage (
   // is needed and the checks hold in every cycle the design spends awake.
   always @(posedge clk) begin
     if (rst_n) begin
-      assert (state != ST_IDLE || if_req_addr == pc) else $error("if_stage: a fresh request must carry the current pc");
+      assert (state != ST_IDLE || if_req_addr == {pc[`p_PC_W-1:2], 2'b00}) else $error("if_stage: a fresh request must carry the current pc, word-aligned");
       assert (state != ST_HOLD || !if_req_valid) else $error("if_stage: no request may be outstanding while an instruction is presented");
-      assert (state != ST_HOLD || instr != {`p_INSTR_W{1'b0}}) else $error("if_stage: an instruction must be presented in ST_HOLD");
+      // The nonzero-instruction check is gone: with compressed encodings the
+      // unused half is masked to zero and a misaligned 32-bit opcode is forced
+      // to zero, so nonzero is no longer the invariant.  `ST_HOLD` itself is
+      // the valid bit.
       assert (state != ST_IDLE || instr == {`p_INSTR_W{1'b0}}) else $error("if_stage: no instruction may be presented before the response arrives");
       assert (!pred_taken) else $error("if_stage: phase 1 has no predictor, so pred_taken must stay low");
     end
